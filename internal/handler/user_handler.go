@@ -125,8 +125,9 @@ func (h *UserHandler) GetProfile(c *gin.Context) {
 func (h *UserHandler) Logout(c *gin.Context) {
 	authHeader := c.GetHeader("Authorization")
 	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+	refreshToken := c.GetHeader("X-Refresh-Token")
 
-	err := h.userService.Logout(tokenString)
+	err := h.userService.Logout(tokenString, refreshToken)
 	if err != nil {
 		log.Error("Logout: Failed to logout", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -135,7 +136,12 @@ func (h *UserHandler) Logout(c *gin.Context) {
 		})
 		return
 	}
-	username, _ := c.Get("username")
+	username := ""
+	if userValue, exists := c.Get("user"); exists {
+		if user, ok := userValue.(*model.User); ok && user != nil {
+			username = user.Username
+		}
+	}
 	log.Infof("User '%s' logged out successfully", username)
 	c.JSON(http.StatusOK, gin.H{
 		"code":    http.StatusOK,

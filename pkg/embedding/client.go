@@ -6,14 +6,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"pai-smart-go/internal/config"
 	"pai-smart-go/pkg/log"
+	"strings"
 )
 
 // Client defines the interface for an embedding client.
 type Client interface {
 	CreateEmbedding(ctx context.Context, text string) ([]float32, error)
+	CreateEmbeddings(ctx context.Context, texts []string) ([][]float32, error)
 }
 
 type openAICompatibleClient struct {
@@ -43,11 +46,27 @@ type embeddingResponse struct {
 
 // CreateEmbedding calls the OpenAI-compatible API to get the vector for a given text.
 func (c *openAICompatibleClient) CreateEmbedding(ctx context.Context, text string) ([]float32, error) {
-	log.Infof("[EmbeddingClient] 开始调用 Embedding API, model: %s, input_len: %d", c.cfg.Model, len(text))
+	vectors, err := c.CreateEmbeddings(ctx, []string{text})
+	if err != nil {
+		return nil, err
+	}
+	if len(vectors) == 0 {
+		return nil, fmt.Errorf("received empty embedding from api")
+	}
+	return vectors[0], nil
+}
+
+func (c *openAICompatibleClient) CreateEmbeddings(ctx context.Context, texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return [][]float32{}, nil
+	}
+	log.Infof("[EmbeddingClient] 开始调用 Embedding API, model: %s, batch_size: %d", c.cfg.Model, len(texts))
 	reqBody := embeddingRequest{
-		Model:      c.cfg.Model, // Use model from config
-		Input:      []string{text},
-		Dimensions: c.cfg.Dimensions, // Use dimensions from config
+		Model: c.cfg.Model, // Use model from config
+		Input: texts,
+	}
+	if shouldSendDimensions(c.cfg) {
+		reqBody.Dimensions = c.cfg.Dimensions
 	}
 
 	reqBytes, err := json.Marshal(reqBody)
@@ -71,8 +90,13 @@ func (c *openAICompatibleClient) CreateEmbedding(ctx context.Context, text strin
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Errorf("[EmbeddingClient] Embedding API 返回非 200 状态码: %s", resp.Status)
-		return nil, fmt.Errorf("embedding api returned non-200 status: %s", resp.Status)
+		body, _ := io.ReadAll(resp.Body)
+		bodyText := strings.TrimSpace(string(body))
+		log.Errorf("[EmbeddingClient] Embedding API 返回非 200 状态码: %s, body: %s", resp.Status, bodyText)
+		if bodyText == "" {
+			return nil, fmt.Errorf("embedding api returned non-200 status: %s", resp.Status)
+		}
+		return nil, fmt.Errorf("embedding api returned non-200 status: %s, body: %s", resp.Status, bodyText)
 	}
 
 	var embeddingResp embeddingResponse
@@ -86,6 +110,28 @@ func (c *openAICompatibleClient) CreateEmbedding(ctx context.Context, text strin
 		return nil, fmt.Errorf("received empty embedding from api")
 	}
 
-	log.Infof("[EmbeddingClient] 成功从 Embedding API 获取向量, 维度: %d", len(embeddingResp.Data[0].Embedding))
-	return embeddingResp.Data[0].Embedding, nil
+	vectors := make([][]float32, 0, len(embeddingResp.Data))
+	for _, item := range embeddingResp.Data {
+		if len(item.Embedding) == 0 {
+			return nil, fmt.Errorf("received empty embedding item from api")
+		}
+		vectors = append(vectors, item.Embedding)
+	}
+	log.Infof("[EmbeddingClient] 成功从 Embedding API 获取向量, count: %d, dim: %d", len(vectors), len(vectors[0]))
+	return vectors, nil
+}
+
+func shouldSendDimensions(cfg config.EmbeddingConfig) bool {
+	if cfg.Dimensions <= 0 {
+		return false
+	}
+
+	baseURL := strings.ToLower(cfg.BaseURL)
+	model := strings.ToLower(cfg.Model)
+
+	if strings.Contains(baseURL, "dashscope.aliyuncs.com") || strings.Contains(model, "text-embedding-v4") {
+		return false
+	}
+
+	return true
 }

@@ -101,6 +101,21 @@ export async function calculateMD5(file: File): Promise<string> {
   });
 }
 
+export async function calculateBlobMD5(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const spark = new SparkMD5.ArrayBuffer();
+    const reader = new FileReader();
+
+    reader.onload = e => {
+      spark.append(e.target?.result as ArrayBuffer);
+      resolve(spark.end());
+    };
+    reader.onerror = () => reject(new Error('鍒嗙墖璇诲彇澶辫触'));
+
+    reader.readAsArrayBuffer(blob);
+  });
+}
+
 export function formatDate(date: string | number | null | undefined, format = 'YYYY-MM-DD HH:mm:ss') {
   if (!date) return '';
   return dayjs(date).format(format);

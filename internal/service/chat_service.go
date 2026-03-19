@@ -41,7 +41,8 @@ func (s *chatService) StreamResponse(ctx context.Context, query string, user *mo
 	// 1. 使用 SearchService 检索上下文（提升覆盖度：topK=10）
 	results, err := s.searchService.HybridSearch(ctx, query, 10, user)
 	if err != nil {
-		return fmt.Errorf("failed to retrieve context: %w", err)
+		log.Warnf("Failed to retrieve context, fallback to chat without retrieval: %v", err)
+		results = []model.SearchResponseDTO{}
 	}
 
 	// 2. 构建上下文与 system 消息、历史

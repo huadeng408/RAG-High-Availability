@@ -2,43 +2,52 @@
 package pipeline
 
 import (
-	"bytes" // 引入 bytes 包
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"pai-smart-go/internal/config"
 	"pai-smart-go/internal/model"
 	"pai-smart-go/internal/repository"
+	"pai-smart-go/pkg/database"
 	"pai-smart-go/pkg/embedding"
 	"pai-smart-go/pkg/es"
+	"pai-smart-go/pkg/kafka"
 	"pai-smart-go/pkg/log"
 	"pai-smart-go/pkg/objectpath"
 	"pai-smart-go/pkg/storage"
 	"pai-smart-go/pkg/tasks"
 	"pai-smart-go/pkg/tika"
+	"strconv"
+	"time"
 	"unicode/utf8"
 
 	"github.com/minio/minio-go/v7"
 )
 
-// Processor 封装了文件处理的所有依赖和逻辑。
+const embeddingCacheTTLSeconds = 7200
+
+// Processor 封装了文件处理阶段的依赖与逻辑。
 type Processor struct {
 	tikaClient      *tika.Client
 	embeddingClient embedding.Client
 	esCfg           config.ElasticsearchConfig
 	minioCfg        config.MinIOConfig
 	embeddingCfg    config.EmbeddingConfig
+	kafkaCfg        config.KafkaConfig
 	uploadRepo      repository.UploadRepository
 	docVectorRepo   repository.DocumentVectorRepository
 }
 
-// NewProcessor 创建一个新的 Processor 实例。
 func NewProcessor(
 	tikaClient *tika.Client,
 	embeddingClient embedding.Client,
 	esCfg config.ElasticsearchConfig,
 	minioCfg config.MinIOConfig,
 	embeddingCfg config.EmbeddingConfig,
+	kafkaCfg config.KafkaConfig,
 	uploadRepo repository.UploadRepository,
 	docVectorRepo repository.DocumentVectorRepository,
 ) *Processor {
@@ -48,135 +57,262 @@ func NewProcessor(
 		esCfg:           esCfg,
 		minioCfg:        minioCfg,
 		embeddingCfg:    embeddingCfg,
+		kafkaCfg:        kafkaCfg,
 		uploadRepo:      uploadRepo,
 		docVectorRepo:   docVectorRepo,
 	}
 }
 
-// Process 是文件处理的主函数。
+// Process routes tasks to specific pipeline stages.
 func (p *Processor) Process(ctx context.Context, task tasks.FileProcessingTask) error {
-	log.Infof("[Processor] 开始处理文件, FileMD5: %s, FileName: %s, UserID: %d", task.FileMD5, task.FileName, task.UserID)
+	switch task.Stage {
+	case tasks.StageParse:
+		return p.processParse(ctx, task)
+	case tasks.StageChunk:
+		return p.processChunk(ctx, task)
+	case tasks.StageEmbed:
+		return p.processEmbed(ctx, task)
+	case tasks.StageIndex:
+		return p.processIndex(ctx, task)
+	default:
+		return fmt.Errorf("unknown pipeline stage: %s", task.Stage)
+	}
+}
 
-	// 1. 从 MinIO 下载文件
+func (p *Processor) processParse(ctx context.Context, task tasks.FileProcessingTask) error {
+	log.Infof("[Processor][parse] 开始处理 file=%s name=%s", task.FileMD5, task.FileName)
 	objectName := objectpath.MergedObjectName(task.FileMD5, task.FileName)
-	log.Infof("[Processor] 步骤1: 从MinIO下载文件, Bucket: %s, Object: %s", p.minioCfg.BucketName, objectName)
 	object, err := storage.MinioClient.GetObject(ctx, p.minioCfg.BucketName, objectName, minio.GetObjectOptions{})
 	if err != nil {
-		log.Errorf("[Processor] 从MinIO下载文件失败, Object: %s, Error: %v", objectName, err)
-		return fmt.Errorf("从 MinIO 下载文件失败: %w", err)
+		return fmt.Errorf("parse: 从 MinIO 下载文件失败: %w", err)
 	}
 	defer object.Close()
 
-	// 增加调试步骤：将文件内容读入内存缓冲区以检查大小
 	buf := new(bytes.Buffer)
 	size, err := buf.ReadFrom(object)
 	if err != nil {
-		log.Errorf("[Processor] 从MinIO对象流中读取内容到缓冲区失败, Error: %v", err)
-		return fmt.Errorf("读取MinIO对象流失败: %w", err)
+		return fmt.Errorf("parse: 读取文件流失败: %w", err)
 	}
-	log.Infof("[Processor] 步骤1: 文件下载成功, 从MinIO流中读取到的文件大小为: %d字节", size)
 	if size == 0 {
-		log.Warnf("[Processor] 文件 '%s' 内容为空, 处理中止", task.FileName)
-		return errors.New("文件内容为空")
+		return errors.New("parse: 文件内容为空")
 	}
 
-	// 2. 使用 Tika 提取文本 (使用缓冲区中的数据)
-	log.Info("[Processor] 步骤2: 使用Tika提取文本内容")
 	textContent, err := p.tikaClient.ExtractText(bytes.NewReader(buf.Bytes()), task.FileName)
 	if err != nil {
-		log.Errorf("[Processor] 使用Tika提取文本失败, FileName: %s, Error: %v", task.FileName, err)
-		return fmt.Errorf("使用 Tika 提取文本失败: %w", err)
+		return fmt.Errorf("parse: 使用 Tika 提取文本失败: %w", err)
 	}
 	if textContent == "" {
-		log.Warnf("[Processor] Tika提取的文本内容为空, 处理中止, FileName: %s", task.FileName)
-		return errors.New("提取的文本内容为空")
+		return errors.New("parse: 提取的文本内容为空")
 	}
-	log.Infof("[Processor] 步骤2: 文本提取成功, 内容长度: %d 字符", utf8.RuneCountInString(textContent))
 
-	// 3. 文本切块
-	log.Info("[Processor] 步骤3: 进行文本分块, chunkSize: 1000, chunkOverlap: 100")
+	parsedObject := p.parsedObjectName(task.FileMD5)
+	reader := bytes.NewReader([]byte(textContent))
+	if _, err := storage.MinioClient.PutObject(ctx, p.minioCfg.BucketName, parsedObject, reader, reader.Size(), minio.PutObjectOptions{
+		ContentType: "text/plain; charset=utf-8",
+	}); err != nil {
+		return fmt.Errorf("parse: 持久化解析文本失败: %w", err)
+	}
+
+	next := task
+	next.Stage = tasks.StageChunk
+	next.ParsedObject = parsedObject
+	if err := kafka.ProduceTask(next); err != nil {
+		return fmt.Errorf("parse: 投递 chunk 阶段消息失败: %w", err)
+	}
+	log.Infof("[Processor][parse] 完成 file=%s text_len=%d", task.FileMD5, utf8.RuneCountInString(textContent))
+	return nil
+}
+
+func (p *Processor) processChunk(ctx context.Context, task tasks.FileProcessingTask) error {
+	log.Infof("[Processor][chunk] 开始 file=%s", task.FileMD5)
+	parsedObject := task.ParsedObject
+	if parsedObject == "" {
+		parsedObject = p.parsedObjectName(task.FileMD5)
+	}
+	object, err := storage.MinioClient.GetObject(ctx, p.minioCfg.BucketName, parsedObject, minio.GetObjectOptions{})
+	if err != nil {
+		return fmt.Errorf("chunk: 读取解析文本失败: %w", err)
+	}
+	defer object.Close()
+	textBytes, err := io.ReadAll(object)
+	if err != nil {
+		return fmt.Errorf("chunk: 读取解析文本流失败: %w", err)
+	}
+	textContent := string(textBytes)
+	if textContent == "" {
+		return errors.New("chunk: 解析文本为空")
+	}
+
 	chunks := p.splitText(textContent, 1000, 100)
-	log.Infof("[Processor] 步骤3: 文本分块完成, 共生成 %d 个分块", len(chunks))
 	if len(chunks) == 0 {
-		log.Warnf("[Processor] 未生成任何文本分块, 处理中止, FileName: %s", task.FileName)
-		return errors.New("未生成任何文本分块")
+		return errors.New("chunk: 未生成任何文本分块")
 	}
 
-	// 阶段一：将分块文本和元数据存入数据库
-	log.Info("[Processor] 阶段一: 开始将分块文本存入数据库")
-	// 为避免重复写入导致的累计膨胀，处理前先清理该文件既有的分块记录（幂等）
 	if err := p.docVectorRepo.DeleteByFileMD5(task.FileMD5); err != nil {
-		log.Warnf("[Processor] 清理 document_vectors 旧记录失败 (file_md5=%s): %v", task.FileMD5, err)
+		log.Warnf("[Processor][chunk] 清理旧分块失败 file=%s err=%v", task.FileMD5, err)
 	}
 	dbVectors := make([]*model.DocumentVector, 0, len(chunks))
 	for i, chunk := range chunks {
 		dbVectors = append(dbVectors, &model.DocumentVector{
-			FileMD5:     task.FileMD5,
-			ChunkID:     i,
-			TextContent: chunk,
-			UserID:      task.UserID,
-			OrgTag:      task.OrgTag,
-			IsPublic:    task.IsPublic,
+			FileMD5:      task.FileMD5,
+			ChunkID:      i,
+			TextContent:  chunk,
+			ModelVersion: p.embeddingCfg.Model,
+			UserID:       task.UserID,
+			OrgTag:       task.OrgTag,
+			IsPublic:     task.IsPublic,
 		})
 	}
 	if err := p.docVectorRepo.BatchCreate(dbVectors); err != nil {
-		log.Errorf("[Processor] 阶段一: 批量保存文本分块到数据库失败, Error: %v", err)
-		return fmt.Errorf("批量保存文本分块失败: %w", err)
+		return fmt.Errorf("chunk: 批量保存文本分块失败: %w", err)
 	}
-	log.Infof("[Processor] 阶段一: 成功将 %d 个分块存入数据库", len(dbVectors))
 
-	// 阶段二：从数据库读取，进行向量化，然后索引到ES
-	log.Info("[Processor] 阶段二: 开始从数据库读取分块并进行向量化")
-	savedVectors, err := p.docVectorRepo.FindByFileMD5(task.FileMD5)
-	if err != nil {
-		log.Errorf("[Processor] 阶段二: 从数据库读取分块失败, FileMD5: %s, Error: %v", task.FileMD5, err)
-		return fmt.Errorf("从数据库读取分块失败: %w", err)
+	next := task
+	next.Stage = tasks.StageEmbed
+	next.ParsedObject = parsedObject
+	if err := kafka.ProduceTask(next); err != nil {
+		return fmt.Errorf("chunk: 投递 embed 阶段消息失败: %w", err)
 	}
-	log.Infof("[Processor] 阶段二: 成功从数据库读取 %d 个分块", len(savedVectors))
-
-	// 4. 向量化并索引到 ES
-	log.Info("[Processor] 步骤4: 开始遍历分块并进行向量化与索引")
-	for i, docVector := range savedVectors {
-		log.Infof("[Processor] 正在处理分块 %d/%d, ChunkID: %d", i+1, len(savedVectors), docVector.ChunkID)
-		// 4a. 向量化
-		vector, err := p.embeddingClient.CreateEmbedding(ctx, docVector.TextContent)
-		if err != nil {
-			log.Errorf("[Processor] 分块 %d 向量化失败, Error: %v", docVector.ChunkID, err)
-			return fmt.Errorf("块 %d 向量化失败: %w", docVector.ChunkID, err)
-		}
-
-		// 4b. 准备 ES 的 EsDocument 对象
-		esDoc := model.EsDocument{
-			VectorID:     fmt.Sprintf("%s_%d", docVector.FileMD5, docVector.ChunkID),
-			FileMD5:      docVector.FileMD5,
-			ChunkID:      docVector.ChunkID,
-			TextContent:  docVector.TextContent,
-			Vector:       vector,
-			ModelVersion: p.embeddingCfg.Model,
-			UserID:       docVector.UserID,
-			OrgTag:       docVector.OrgTag,
-			IsPublic:     docVector.IsPublic,
-		}
-		log.Infof("[Processor] 准备索引到ES的文档 (ChunkID: %d): %+v", esDoc.ChunkID, esDoc)
-
-		// 4c. 索引到 Elasticsearch
-		if err := es.IndexDocument(ctx, p.esCfg.IndexName, esDoc); err != nil {
-			log.Errorf("[Processor] 索引分块 %d 到Elasticsearch失败, Error: %v", docVector.ChunkID, err)
-			return fmt.Errorf("索引块 %d 到 Elasticsearch 失败: %w", docVector.ChunkID, err)
-		}
-		log.Infof("[Processor] 分块 %d/%d 向量化并索引成功", i+1, len(savedVectors))
-	}
-	log.Info("[Processor] 步骤4: 所有分块处理完毕")
-
-	log.Infof("[Processor] 文件处理成功完成, FileMD5: %s", task.FileMD5)
+	log.Infof("[Processor][chunk] 完成 file=%s chunks=%d", task.FileMD5, len(chunks))
 	return nil
 }
 
+type cachedEmbedding struct {
+	ChunkID int       `json:"chunkId"`
+	Vector  []float32 `json:"vector"`
+}
+
+func (p *Processor) processEmbed(ctx context.Context, task tasks.FileProcessingTask) error {
+	log.Infof("[Processor][embed] 开始 file=%s", task.FileMD5)
+	savedVectors, err := p.docVectorRepo.FindByFileMD5(task.FileMD5)
+	if err != nil {
+		return fmt.Errorf("embed: 读取分块失败: %w", err)
+	}
+	if len(savedVectors) == 0 {
+		return errors.New("embed: 分块为空")
+	}
+
+	batchSize := p.kafkaCfg.EmbeddingBatchSize
+	if batchSize <= 0 {
+		batchSize = 8
+	}
+	cache := make([]cachedEmbedding, 0, len(savedVectors))
+	for i := 0; i < len(savedVectors); i += batchSize {
+		end := i + batchSize
+		if end > len(savedVectors) {
+			end = len(savedVectors)
+		}
+		texts := make([]string, 0, end-i)
+		for _, item := range savedVectors[i:end] {
+			texts = append(texts, item.TextContent)
+		}
+		vectors, err := p.embeddingClient.CreateEmbeddings(ctx, texts)
+		if err != nil {
+			return fmt.Errorf("embed: 批量向量化失败 batch_start=%d: %w", i, err)
+		}
+		if len(vectors) != len(texts) {
+			return fmt.Errorf("embed: 向量数量不匹配 expected=%d actual=%d", len(texts), len(vectors))
+		}
+		for j := range vectors {
+			cache = append(cache, cachedEmbedding{
+				ChunkID: savedVectors[i+j].ChunkID,
+				Vector:  vectors[j],
+			})
+		}
+	}
+
+	cacheBytes, err := json.Marshal(cache)
+	if err != nil {
+		return fmt.Errorf("embed: 序列化向量缓存失败: %w", err)
+	}
+	cacheKey := p.embeddingCacheKey(task.FileMD5)
+	if err := database.RDB.Set(ctx, cacheKey, cacheBytes, embeddingCacheTTLSeconds*time.Second).Err(); err != nil {
+		return fmt.Errorf("embed: 写入 Redis 向量缓存失败: %w", err)
+	}
+
+	next := task
+	next.Stage = tasks.StageIndex
+	if err := kafka.ProduceTask(next); err != nil {
+		return fmt.Errorf("embed: 投递 index 阶段消息失败: %w", err)
+	}
+	log.Infof("[Processor][embed] 完成 file=%s vectors=%d", task.FileMD5, len(cache))
+	return nil
+}
+
+func (p *Processor) processIndex(ctx context.Context, task tasks.FileProcessingTask) error {
+	log.Infof("[Processor][index] 开始 file=%s", task.FileMD5)
+	savedVectors, err := p.docVectorRepo.FindByFileMD5(task.FileMD5)
+	if err != nil {
+		return fmt.Errorf("index: 读取分块失败: %w", err)
+	}
+	if len(savedVectors) == 0 {
+		return errors.New("index: 分块为空")
+	}
+
+	cacheKey := p.embeddingCacheKey(task.FileMD5)
+	cacheBytes, err := database.RDB.Get(ctx, cacheKey).Bytes()
+	if err != nil {
+		return fmt.Errorf("index: 读取 Redis 向量缓存失败: %w", err)
+	}
+	var cache []cachedEmbedding
+	if err := json.Unmarshal(cacheBytes, &cache); err != nil {
+		return fmt.Errorf("index: 解析 Redis 向量缓存失败: %w", err)
+	}
+	vectorMap := make(map[int][]float32, len(cache))
+	for _, item := range cache {
+		vectorMap[item.ChunkID] = item.Vector
+	}
+
+	docs := make([]model.EsDocument, 0, len(savedVectors))
+	for _, item := range savedVectors {
+		vector, ok := vectorMap[item.ChunkID]
+		if !ok || len(vector) == 0 {
+			return fmt.Errorf("index: 缺少 chunk=%d 的向量数据", item.ChunkID)
+		}
+		docs = append(docs, model.EsDocument{
+			VectorID:     task.FileMD5 + "_" + strconv.Itoa(item.ChunkID),
+			FileMD5:      item.FileMD5,
+			ChunkID:      item.ChunkID,
+			TextContent:  item.TextContent,
+			Vector:       vector,
+			ModelVersion: p.embeddingCfg.Model,
+			UserID:       item.UserID,
+			OrgTag:       item.OrgTag,
+			IsPublic:     item.IsPublic,
+		})
+	}
+
+	bulkSize := p.kafkaCfg.ESBulkBatchSize
+	if bulkSize <= 0 {
+		bulkSize = 100
+	}
+	for i := 0; i < len(docs); i += bulkSize {
+		end := i + bulkSize
+		if end > len(docs) {
+			end = len(docs)
+		}
+		if err := es.BulkIndexDocuments(ctx, p.esCfg.IndexName, docs[i:end]); err != nil {
+			return fmt.Errorf("index: ES bulk 索引失败 batch_start=%d: %w", i, err)
+		}
+	}
+
+	_ = database.RDB.Del(ctx, cacheKey).Err()
+	_ = storage.MinioClient.RemoveObject(ctx, p.minioCfg.BucketName, p.parsedObjectName(task.FileMD5), minio.RemoveObjectOptions{})
+	log.Infof("[Processor][index] 完成 file=%s docs=%d", task.FileMD5, len(docs))
+	return nil
+}
+
+func (p *Processor) embeddingCacheKey(fileMD5 string) string {
+	return "pipeline:embeddings:" + fileMD5
+}
+
+func (p *Processor) parsedObjectName(fileMD5 string) string {
+	return "parsed/" + fileMD5 + ".txt"
+}
+
 // splitText 将长文本按指定大小和重叠进行切分。
-// (与Java的CharacterTextSplitter逻辑保持一致)
 func (p *Processor) splitText(text string, chunkSize int, chunkOverlap int) []string {
 	if chunkSize <= chunkOverlap {
-		// Fallback to simple split if overlap is invalid
 		return p.simpleSplit(text, chunkSize)
 	}
 

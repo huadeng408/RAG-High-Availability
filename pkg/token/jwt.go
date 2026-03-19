@@ -20,11 +20,17 @@ type JWTManager struct {
 // CustomClaims 定义了我们想要在 JWT 中存储的自定义数据。
 // 它嵌入了 jwt.RegisteredClaims 以包含标准的 JWT 声明（如过期时间）。
 type CustomClaims struct {
-	UserID   uint   `json:"userId"`
-	Username string `json:"username"`
-	Role     string `json:"role"`
+	UserID    uint   `json:"userId"`
+	Username  string `json:"username"`
+	Role      string `json:"role"`
+	TokenType string `json:"tokenType"`
 	jwt.RegisteredClaims
 }
+
+const (
+	TokenTypeAccess  = "access"
+	TokenTypeRefresh = "refresh"
+)
 
 // NewJWTManager 创建一个新的 JWTManager 实例。
 // secret: 用于签名的密钥字符串。
@@ -40,32 +46,23 @@ func NewJWTManager(secret string, accessTokenExpireHours, refreshTokenExpireDays
 
 // GenerateToken 根据给定的用户信息生成一个新的 access token。
 func (m *JWTManager) GenerateToken(userID uint, username, role string) (string, error) {
-	// 创建 claims，包含自定义数据和标准过期时间
-	claims := CustomClaims{
-		UserID:   userID,
-		Username: username,
-		Role:     role,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(m.accessTokenDur)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			NotBefore: jwt.NewNumericDate(time.Now()),
-		},
-	}
-	// 使用 HS256 签名方法创建新的 token 对象
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	// 使用密钥签名 token 并返回字符串形式
-	return token.SignedString(m.secretKey)
+	return m.generateToken(userID, username, role, TokenTypeAccess, m.accessTokenDur)
 }
 
 // GenerateRefreshToken 根据给定的用户信息生成一个新的 refresh token。
 // 它的工作方式与 GenerateToken 类似，但使用更长的过期时间。
 func (m *JWTManager) GenerateRefreshToken(userID uint, username, role string) (string, error) {
+	return m.generateToken(userID, username, role, TokenTypeRefresh, m.refreshTokenDur)
+}
+
+func (m *JWTManager) generateToken(userID uint, username, role, tokenType string, duration time.Duration) (string, error) {
 	claims := CustomClaims{
-		UserID:   userID,
-		Username: username,
-		Role:     role,
+		UserID:    userID,
+		Username:  username,
+		Role:      role,
+		TokenType: tokenType,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(m.refreshTokenDur)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(duration)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
 		},

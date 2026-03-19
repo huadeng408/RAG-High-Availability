@@ -102,8 +102,11 @@ services:
     entrypoint: >
       sh -c "
       sleep 10;
-      kafka-topics --create --if-not-exists --topic file-processing --bootstrap-server kafka:29092 || true;
-      kafka-topics --create --if-not-exists --topic vectorization --bootstrap-server kafka:29092 || true;
+      kafka-topics --create --if-not-exists --topic file-parse --bootstrap-server kafka:29092 || true;
+      kafka-topics --create --if-not-exists --topic file-chunk --bootstrap-server kafka:29092 || true;
+      kafka-topics --create --if-not-exists --topic file-embed --bootstrap-server kafka:29092 || true;
+      kafka-topics --create --if-not-exists --topic file-index --bootstrap-server kafka:29092 || true;
+      kafka-topics --create --if-not-exists --topic file-dlq --bootstrap-server kafka:29092 || true;
       "
     restart: "no"
 

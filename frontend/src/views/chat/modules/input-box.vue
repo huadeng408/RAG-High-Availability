@@ -17,8 +17,17 @@ const sendable = computed(
 );
 
 watch(wsData, val => {
-  const data = JSON.parse(val);
+  if (!val) return;
+
+  let data: Record<string, any>;
+  try {
+    data = JSON.parse(val);
+  } catch {
+    return;
+  }
+
   const assistant = list.value[list.value.length - 1];
+  if (!assistant) return;
 
   if (data.type === 'completion' && data.status === 'finished' && assistant.status !== 'error')
     assistant.status = 'finished';

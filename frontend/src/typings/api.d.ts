@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Namespace Api
  *
  * All backend api type
@@ -123,7 +123,7 @@ declare namespace Api {
 
     interface UploadState {
       tasks: UploadTask[];
-      activeUploads: Set<string>; // 当前正在上传的任务ID
+      activeUploads: Set<string>; // 褰撳墠姝ｅ湪涓婁紶鐨勪换鍔D
     }
 
     interface Form {
@@ -133,12 +133,13 @@ declare namespace Api {
       fileList: import('naive-ui').UploadFileInfo[];
     }
 
-    interface UploadTask {
-      file: File;
+        interface UploadTask {
+      file: File | null;
       chunk: Blob | null;
       fileMd5: string;
       chunkIndex: number;
       totalSize: number;
+      totalChunks?: number;
       fileName: string;
       orgTag: string | null;
       orgTagName?: string | null;
@@ -149,12 +150,28 @@ declare namespace Api {
       status: UploadStatus;
       createdAt?: string;
       mergedAt?: string;
-      requestIds?: string[]; // 请求ID，用于取消上传
+      requestIds?: string[];
+      chunkMd5Map?: Record<number, string>;
+      chunkRetryCount?: Record<number, number>;
+      lastError?: string;
+      updatedAt?: number;
+      localFileKey?: string;
     }
     type List = Common.PaginatingQueryRecord<UploadTask>;
 
     type Merge = Pick<UploadTask, 'fileMd5' | 'fileName'>;
+    interface UploadCheckResponse {
+      completed: boolean;
+      uploadedChunks: number[];
+    }
 
+    interface UploadStatusResponse {
+      fileName: string;
+      fileType: string;
+      uploaded: number[];
+      progress: number;
+      totalChunks: number;
+    }
     interface Progress {
       uploaded: number[];
       progress: number;
@@ -201,3 +218,5 @@ declare namespace Api {
     }
   }
 }
+
+

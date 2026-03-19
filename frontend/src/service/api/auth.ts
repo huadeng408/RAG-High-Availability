@@ -1,4 +1,5 @@
 import { request } from '../request';
+import { localStg } from '@/utils/storage';
 
 /**
  * Login
@@ -18,7 +19,13 @@ export function fetchLogin(username: string, password: string) {
 }
 
 export function fetchLogout() {
-  return request({ url: '/users/logout', method: 'post' });
+  const refreshToken = localStg.get('refreshToken') || '';
+
+  return request({
+    url: '/users/logout',
+    method: 'post',
+    headers: refreshToken ? { 'X-Refresh-Token': refreshToken } : undefined
+  });
 }
 
 export function fetchRegister(username: string, password: string) {

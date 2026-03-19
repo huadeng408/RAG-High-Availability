@@ -58,6 +58,10 @@ func AuthMiddleware(jwtManager *token.JWTManager, userService service.UserServic
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "无效或已过期的 token"})
 			return
 		}
+		if claims.TokenType != token.TokenTypeAccess {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "无效的 token 类型"})
+			return
+		}
 
 		// 使用 claims 中的用户名从数据库获取完整的用户信息
 		user, err := userService.GetProfile(claims.Username)

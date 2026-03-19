@@ -1,9 +1,9 @@
-<script setup lang="tsx">
+﻿<script setup lang="tsx">
 import type { UploadFileInfo } from 'naive-ui';
-import { NButton, NEllipsis, NModal, NPopconfirm, NProgress, NTag, NUpload } from 'naive-ui';
+import { NButton, NCard, NDataTable, NEllipsis, NModal, NPopconfirm, NProgress, NTag, NUpload } from 'naive-ui';
+import { UploadStatus } from '@/enum';
 import { uploadAccept } from '@/constants/common';
 import { fakePaginationRequest } from '@/service/request';
-import { UploadStatus } from '@/enum';
 import SvgIcon from '@/components/custom/svg-icon.vue';
 import FilePreview from '@/components/custom/file-preview.vue';
 import UploadDialog from './modules/upload-dialog.vue';
@@ -11,7 +11,6 @@ import SearchDialog from './modules/search-dialog.vue';
 
 const appStore = useAppStore();
 
-// 文件预览相关状态
 const previewVisible = ref(false);
 const previewFileName = ref('');
 
@@ -22,22 +21,28 @@ function apiFn() {
 function renderIcon(fileName: string) {
   const ext = getFileExt(fileName);
   if (ext) {
-    if (uploadAccept.split(',').includes(`.${ext}`)) return <SvgIcon localIcon={ext} class="mx-4 text-12" />;
+    if (uploadAccept.split(',').includes(`.${ext}`)) {
+      return <SvgIcon localIcon={ext} class="mx-4 text-12" />;
+    }
     return <SvgIcon localIcon="dflt" class="mx-4 text-12" />;
   }
   return null;
 }
 
-// 处理文件预览
 function handleFilePreview(fileName: string) {
   previewFileName.value = fileName;
   previewVisible.value = true;
 }
 
-// 关闭文件预览
 function closeFilePreview() {
   previewVisible.value = false;
   previewFileName.value = '';
+}
+
+function renderStatus(status: UploadStatus, percentage: number) {
+  if (status === UploadStatus.Completed) return <NTag type="success">已完成</NTag>;
+  if (status === UploadStatus.Break) return <NTag type="error">上传中断</NTag>;
+  return <NProgress percentage={percentage} processing />;
 }
 
 const { columns, columnChecks, data, getData, loading } = useTable({
@@ -48,14 +53,11 @@ const { columns, columnChecks, data, getData, loading } = useTable({
       key: 'fileName',
       title: '文件名',
       minWidth: 400,
-      render: row => (
+      render: (row: any) => (
         <div class="flex items-center">
           {renderIcon(row.fileName)}
           <NEllipsis lineClamp={2} tooltip>
-            <span
-              class="cursor-pointer hover:text-primary transition-colors"
-              onClick={() => handleFilePreview(row.fileName)}
-            >
+            <span class="cursor-pointer hover:text-primary transition-colors" onClick={() => handleFilePreview(row.fileName)}>
               {row.fileName}
             </span>
           </NEllipsis>
@@ -64,15 +66,15 @@ const { columns, columnChecks, data, getData, loading } = useTable({
     },
     {
       key: 'totalSize',
-      title: '文件大小',
+      title: '大小',
       width: 100,
-      render: row => fileSize(row.totalSize)
+      render: (row: any) => fileSize(row.totalSize)
     },
     {
       key: 'status',
-      title: '上传状态',
+      title: '状态',
       width: 100,
-      render: row => renderStatus(row.status, row.progress)
+      render: (row: any) => renderStatus(row.status, row.progress)
     },
     {
       key: 'orgTagName',
@@ -82,29 +84,24 @@ const { columns, columnChecks, data, getData, loading } = useTable({
     },
     {
       key: 'isPublic',
-      title: '是否公开',
+      title: '公开',
       width: 100,
-      render: row => (row.public || row.isPublic ? <NTag type="success">公开</NTag> : <NTag type="warning">私有</NTag>)
+      render: (row: any) => (row.public || row.isPublic ? <NTag type="success">公开</NTag> : <NTag type="warning">私有</NTag>)
     },
     {
       key: 'createdAt',
       title: '上传时间',
-      width: 100,
-      render: row => dayjs(row.createdAt).format('YYYY-MM-DD')
+      width: 140,
+      render: (row: any) => dayjs(row.createdAt).format('YYYY-MM-DD')
     },
     {
       key: 'operate',
       title: '操作',
-      width: 180,
-      render: row => (
+      width: 200,
+      render: (row: any) => (
         <div class="flex gap-4">
           {renderResumeUploadButton(row)}
-          <NButton
-            type="primary"
-            ghost
-            size="small"
-            onClick={() => handleFilePreview(row.fileName)}
-          >
+          <NButton type="primary" ghost size="small" onClick={() => handleFilePreview(row.fileName)}>
             预览
           </NButton>
           <NPopconfirm onPositiveClick={() => handleDelete(row.fileMd5)}>
@@ -125,52 +122,57 @@ const { columns, columnChecks, data, getData, loading } = useTable({
 
 const store = useKnowledgeBaseStore();
 const { tasks } = storeToRefs(store);
+
 onMounted(async () => {
   await getList();
+  store.startUpload();
 });
 
-/** 异步获取列表函数 该函数主要用于更新或初始化上传任务列表 它首先调用getData函数获取数据，然后根据获取到的数据状态更新任务列表 */
 async function getList() {
-  // 等待获取最新数据
   await getData();
 
   if (data.value.length === 0) {
-    tasks.value = [];
+    tasks.value = tasks.value.filter(task => task.status !== UploadStatus.Completed);
     return;
   }
 
-  // 遍历获取到的数据，以处理每个项目
-  data.value.forEach(item => {
-    // 检查项目状态是否为已完成
+  data.value.forEach((item: any) => {
     if (item.status === UploadStatus.Completed) {
-      // 查找任务列表中是否有匹配的文件MD5
       const index = tasks.value.findIndex(task => task.fileMd5 === item.fileMd5);
-      // 如果找到匹配项，则更新其状态
       if (index !== -1) {
         tasks.value[index].status = UploadStatus.Completed;
       } else {
-        // 如果没有找到匹配项，则将该项目添加到任务列表中
-        tasks.value.push(item);
+        tasks.value.push({
+          ...(item as Api.KnowledgeBase.UploadTask),
+          file: null,
+          chunk: null,
+          requestIds: []
+        });
       }
-    } else if (!tasks.value.some(task => task.fileMd5 === item.fileMd5)) {
-      // 如果项目状态不是已完成，并且任务列表中没有相同的文件MD5，则将该项目的状态设置为中断，并添加到任务列表中
+      return;
+    }
+
+    if (!tasks.value.some(task => task.fileMd5 === item.fileMd5)) {
       item.status = UploadStatus.Break;
-      tasks.value.push(item);
+      tasks.value.push({
+        ...(item as Api.KnowledgeBase.UploadTask),
+        file: null,
+        chunk: null,
+        requestIds: []
+      });
     }
   });
 }
 
 async function handleDelete(fileMd5: string) {
   const index = tasks.value.findIndex(task => task.fileMd5 === fileMd5);
+  if (index === -1) return;
 
-  if (index !== -1) {
-    tasks.value[index].requestIds?.forEach(requestId => {
-      request.cancelRequest(requestId);
-    });
-  }
+  tasks.value[index].requestIds?.forEach(requestId => {
+    request.cancelRequest(requestId);
+  });
 
-  // 如果文件一个分片也没有上传完成，则直接删除
-  if (tasks.value[index].uploadedChunks && tasks.value[index].uploadedChunks.length === 0) {
+  if (!tasks.value[index].uploadedChunks?.length) {
     tasks.value.splice(index, 1);
     return;
   }
@@ -183,54 +185,42 @@ async function handleDelete(fileMd5: string) {
   }
 }
 
-// #region 文件上传
 const uploadVisible = ref(false);
 function handleUpload() {
   uploadVisible.value = true;
 }
-// #endregion
 
-// #region 检索知识库
 const searchVisible = ref(false);
 function handleSearch() {
   searchVisible.value = true;
 }
-// #endregion
 
-// 渲染上传状态
-function renderStatus(status: UploadStatus, percentage: number) {
-  if (status === UploadStatus.Completed) return <NTag type="success">已完成</NTag>;
-  else if (status === UploadStatus.Break) return <NTag type="error">上传中断</NTag>;
-  return <NProgress percentage={percentage} processing />;
-}
-
-// #region 文件续传
 function renderResumeUploadButton(row: Api.KnowledgeBase.UploadTask) {
-  if (row.status === UploadStatus.Break) {
-    if (row.file)
-      return (
-        <NButton type="primary" size="small" ghost onClick={() => resumeUpload(row)}>
-          续传
-        </NButton>
-      );
+  if (row.status !== UploadStatus.Break) return null;
+
+  if (row.file) {
     return (
-      <NUpload
-        show-file-list={false}
-        default-upload={false}
-        accept={uploadAccept}
-        onBeforeUpload={options => onBeforeUpload(options, row)}
-        class="w-fit"
-      >
-        <NButton type="primary" size="small" ghost>
-          续传
-        </NButton>
-      </NUpload>
+      <NButton type="primary" size="small" ghost onClick={() => resumeUpload(row)}>
+        续传
+      </NButton>
     );
   }
-  return null;
+
+  return (
+    <NUpload
+      show-file-list={false}
+      default-upload={false}
+      accept={uploadAccept}
+      onBeforeUpload={options => onBeforeUpload(options, row)}
+      class="w-fit"
+    >
+      <NButton type="primary" size="small" ghost>
+        续传
+      </NButton>
+    </NUpload>
+  );
 }
 
-// 任务列表存在文件，直接续传
 function resumeUpload(row: Api.KnowledgeBase.UploadTask) {
   row.status = UploadStatus.Pending;
   store.startUpload();
@@ -240,25 +230,32 @@ async function onBeforeUpload(
   options: { file: UploadFileInfo; fileList: UploadFileInfo[] },
   row: Api.KnowledgeBase.UploadTask
 ) {
-  const md5 = await calculateMD5(options.file.file!);
+  const file = options.file.file;
+  if (!file) return false;
+
+  const md5 = await calculateMD5(file);
   if (md5 !== row.fileMd5) {
-    window.$message?.error('两次上传的文件不一致');
+    window.$message?.error('选择的文件与原任务不一致');
     return false;
   }
+
   loading.value = true;
-  const { error, data: progress } = await request<Api.KnowledgeBase.Progress>({
+  const { error, data: progress } = await request<Api.KnowledgeBase.UploadStatusResponse>({
     url: '/upload/status',
     params: { file_md5: row.fileMd5 }
   });
+
   if (!error) {
-    row.file = options.file.file!;
+    row.file = file;
     row.status = UploadStatus.Pending;
     row.progress = progress.progress;
     row.uploadedChunks = progress.uploaded;
+    row.totalChunks = progress.totalChunks;
     store.startUpload();
     loading.value = false;
     return true;
   }
+
   loading.value = false;
   return false;
 }
@@ -288,30 +285,22 @@ async function onBeforeUpload(
         :scroll-x="962"
         :loading="loading"
         remote
-        :row-key="row => row.id"
+        :row-key="(row: any) => row.fileMd5"
         :pagination="false"
         class="sm:h-full"
       />
     </NCard>
+
     <UploadDialog v-model:visible="uploadVisible" />
     <SearchDialog v-model:visible="searchVisible" />
-    
-    <!-- 文件预览弹窗 -->
-    <NModal v-model:show="previewVisible" preset="card" title="文件预览" style="width: 80%; max-width: 1000px;">
-      <FilePreview
-        :file-name="previewFileName"
-        :visible="previewVisible"
-        @close="closeFilePreview"
-      />
+
+    <NModal v-model:show="previewVisible" preset="card" title="文件预览" style="width: 80%; max-width: 1000px">
+      <FilePreview :file-name="previewFileName" :visible="previewVisible" @close="closeFilePreview" />
     </NModal>
   </div>
 </template>
 
 <style scoped lang="scss">
-.file-list-container {
-  transition: width 0.3s ease;
-}
-
 :deep() {
   .n-progress-icon.n-progress-icon--as-text {
     white-space: nowrap;

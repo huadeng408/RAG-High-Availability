@@ -22,7 +22,7 @@ type UserService interface {
 	Register(username, password string) (*model.User, error)
 	Login(username, password string) (accessToken, refreshToken string, err error)
 	GetProfile(username string) (*model.User, error)
-	Logout(tokenString string) error
+	Logout(accessTokenString, refreshTokenString string) error
 	IsTokenBlacklisted(tokenString string) (bool, error)
 	SetUserPrimaryOrg(username, orgTag string) error
 	GetUserOrgTags(username string) (map[string]interface{}, error)
@@ -48,6 +48,11 @@ func NewUserService(userRepo repository.UserRepository, orgTagRepo repository.Or
 
 // Register 处理用户注册的业务逻辑。
 func (s *userService) Register(username, password string) (*model.User, error) {
+	username = strings.TrimSpace(username)
+	if err := validateUsername(username); err != nil {
+		return nil, err
+	}
+
 	// 1. 检查用户名是否已存在
 	_, err := s.userRepo.FindByUsername(username)
 	if err == nil {
@@ -77,7 +82,7 @@ func (s *userService) Register(username, password string) (*model.User, error) {
 	}
 
 	// 5. 创建用户的私人组织标签 (与Java逻辑对齐)
-	privateTagId := "PRIVATE_" + username
+	privateTagId := fmt.Sprintf("PRIVATE_%d", newUser.ID)
 	privateTagName := username + "的私人空间"
 
 	// 检查私人标签是否已存在
@@ -151,7 +156,25 @@ func (s *userService) GetProfile(username string) (*model.User, error) {
 }
 
 // Logout 处理用户登出逻辑，将 token 加入 Redis 黑名单。
-func (s *userService) Logout(tokenString string) error {
+func (s *userService) Logout(accessTokenString, refreshTokenString string) error {
+	if strings.TrimSpace(accessTokenString) == "" {
+		return errors.New("access token is required")
+	}
+	if err := s.blacklistToken(accessTokenString); err != nil {
+		return err
+	}
+	refreshTokenString = strings.TrimSpace(refreshTokenString)
+	if refreshTokenString != "" {
+		if err := s.blacklistToken(refreshTokenString); err != nil {
+			// 登出流程以 access token 吊销为主，refresh 吊销失败时仅记录日志，不阻断登出。
+			log.Warnf("[UserService] refresh token 吊销失败: %v", err)
+		}
+	}
+	return nil
+}
+
+func (s *userService) blacklistToken(tokenString string) error {
+	tokenString = strings.TrimSpace(tokenString)
 	claims, err := s.jwtManager.VerifyToken(tokenString)
 	if err != nil {
 		return err
@@ -159,11 +182,15 @@ func (s *userService) Logout(tokenString string) error {
 	// 使用 Redis 实现一个简单的 token 黑名单。
 	// token 的剩余有效期将作为 Redis key 的过期时间。
 	expiration := time.Until(claims.ExpiresAt.Time)
+	if expiration <= 0 {
+		expiration = time.Second
+	}
 	// 将 token 存入黑名单，值为 "true"，并设置过期时间
 	return database.RDB.Set(context.Background(), "blacklist:"+tokenString, "true", expiration).Err()
 }
 
 func (s *userService) IsTokenBlacklisted(tokenString string) (bool, error) {
+	tokenString = strings.TrimSpace(tokenString)
 	exists, err := database.RDB.Exists(context.Background(), "blacklist:"+tokenString).Result()
 	if err != nil {
 		return false, err
@@ -289,9 +316,20 @@ func (s *userService) GetUserEffectiveOrgTags(user *model.User) ([]string, error
 
 // RefreshToken 验证 refresh token 并签发新的 access token 和 refresh token。
 func (s *userService) RefreshToken(refreshTokenString string) (newAccessToken, newRefreshToken string, err error) {
+	isBlacklisted, err := s.IsTokenBlacklisted(refreshTokenString)
+	if err != nil {
+		return "", "", errors.New("failed to check refresh token status")
+	}
+	if isBlacklisted {
+		return "", "", errors.New("refresh token has been revoked")
+	}
+
 	// 1. 验证 refresh token 是否有效
 	claims, err := s.jwtManager.VerifyToken(refreshTokenString)
 	if err != nil {
+		return "", "", errors.New("invalid refresh token")
+	}
+	if claims.TokenType != token.TokenTypeRefresh {
 		return "", "", errors.New("invalid refresh token")
 	}
 
@@ -324,4 +362,14 @@ func containsExactTag(orgTags, target string) bool {
 		}
 	}
 	return false
+}
+
+func validateUsername(username string) error {
+	if username == "" {
+		return errors.New("用户名不能为空")
+	}
+	if strings.Contains(username, ",") {
+		return errors.New("用户名不能包含逗号")
+	}
+	return nil
 }

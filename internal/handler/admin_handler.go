@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"pai-smart-go/internal/service"
 	"pai-smart-go/pkg/log"
+	"pai-smart-go/pkg/tasks"
 	"pai-smart-go/pkg/token"
 	"strconv"
 	"time"
@@ -224,4 +225,21 @@ func (h *AdminHandler) DeleteOrganizationTag(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": http.StatusOK, "message": "Tag deleted successfully", "data": nil})
+}
+
+func (h *AdminHandler) ReplayPipelineTask(c *gin.Context) {
+	var req struct {
+		FileMD5 string `json:"fileMd5" binding:"required"`
+		Stage   string `json:"stage"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效请求参数", "data": nil})
+		return
+	}
+
+	if err := h.adminService.ReplayPipelineTask(req.FileMD5, tasks.Stage(req.Stage)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": err.Error(), "data": nil})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": http.StatusOK, "message": "已提交重放任务", "data": nil})
 }

@@ -25,7 +25,9 @@ type UploadRepository interface {
 
 	// ChunkInfo operations (GORM)
 	CreateChunkInfoRecord(record *model.ChunkInfo) error
+	UpsertChunkInfoRecord(record *model.ChunkInfo) error
 	GetChunkInfoRecords(fileMD5 string) ([]model.ChunkInfo, error)
+	GetChunkInfoRecord(fileMD5 string, chunkIndex int) (*model.ChunkInfo, error)
 
 	// Chunk status operations (Redis)
 	IsChunkUploaded(ctx context.Context, fileMD5 string, userID uint, chunkIndex int) (bool, error)
@@ -96,6 +98,15 @@ func (r *uploadRepository) GetChunkInfoRecords(fileMD5 string) ([]model.ChunkInf
 	return chunks, err
 }
 
+func (r *uploadRepository) GetChunkInfoRecord(fileMD5 string, chunkIndex int) (*model.ChunkInfo, error) {
+	var chunk model.ChunkInfo
+	err := r.db.Where("file_md5 = ? AND chunk_index = ?", fileMD5, chunkIndex).First(&chunk).Error
+	if err != nil {
+		return nil, err
+	}
+	return &chunk, nil
+}
+
 // FindFilesByUserID 查找指定用户上传的所有文件。
 func (r *uploadRepository) FindFilesByUserID(userID uint) ([]model.FileUpload, error) {
 	var files []model.FileUpload
@@ -133,6 +144,20 @@ func (r *uploadRepository) UpdateFileUploadRecord(record *model.FileUpload) erro
 // CreateChunkInfoRecord 在数据库中创建一个新的文件分块记录。
 func (r *uploadRepository) CreateChunkInfoRecord(record *model.ChunkInfo) error {
 	return r.db.Create(record).Error
+}
+
+func (r *uploadRepository) UpsertChunkInfoRecord(record *model.ChunkInfo) error {
+	var existing model.ChunkInfo
+	err := r.db.Where("file_md5 = ? AND chunk_index = ?", record.FileMD5, record.ChunkIndex).First(&existing).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return r.db.Create(record).Error
+		}
+		return err
+	}
+	existing.ChunkMD5 = record.ChunkMD5
+	existing.StoragePath = record.StoragePath
+	return r.db.Save(&existing).Error
 }
 
 // IsChunkUploaded checks if a chunk is marked as uploaded in Redis.

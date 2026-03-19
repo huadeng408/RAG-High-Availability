@@ -70,6 +70,10 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"code": http.StatusUnauthorized, "message": "无效的 token", "data": nil})
 		return
 	}
+	if claims.TokenType != token.TokenTypeAccess {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": http.StatusUnauthorized, "message": "无效的 token 类型", "data": nil})
+		return
+	}
 
 	// 获取用户模型
 	user, err := h.userService.GetProfile(claims.Username)

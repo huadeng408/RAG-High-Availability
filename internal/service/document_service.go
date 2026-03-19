@@ -4,7 +4,6 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/url"
 	"pai-smart-go/internal/config"
 	"pai-smart-go/internal/model"

@@ -65,8 +65,22 @@ type LogConfig struct {
 
 // KafkaConfig 存储 Kafka 相关的配置。
 type KafkaConfig struct {
-	Brokers string `mapstructure:"brokers"`
-	Topic   string `mapstructure:"topic"`
+	Brokers             string                 `mapstructure:"brokers"`
+	Topic               string                 `mapstructure:"topic"`
+	Topics              KafkaTopicsConfig      `mapstructure:"topics"`
+	ConsumerGroupPrefix string                 `mapstructure:"consumer_group_prefix"`
+	MaxRetries          int                    `mapstructure:"max_retries"`
+	BaseBackoffMs       int                    `mapstructure:"base_backoff_ms"`
+	EmbeddingBatchSize  int                    `mapstructure:"embedding_batch_size"`
+	ESBulkBatchSize     int                    `mapstructure:"es_bulk_batch_size"`
+}
+
+type KafkaTopicsConfig struct {
+	Parse string `mapstructure:"parse"`
+	Chunk string `mapstructure:"chunk"`
+	Embed string `mapstructure:"embed"`
+	Index string `mapstructure:"index"`
+	DLQ   string `mapstructure:"dlq"`
 }
 
 // TikaConfig 存储 Tika 服务器相关的配置。
