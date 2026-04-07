@@ -1,0 +1,313 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="7680" height="4320" viewBox="0 0 7680 4320" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="7680" y2="4320" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#06152D"/>
+      <stop offset="0.5" stop-color="#071A38"/>
+      <stop offset="1" stop-color="#041124"/>
+    </linearGradient>
+    <radialGradient id="glowCenter" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(4020 1880) rotate(90) scale(1600 2200)">
+      <stop offset="0" stop-color="#0CC4FF" stop-opacity="0.30"/>
+      <stop offset="0.55" stop-color="#0CC4FF" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#0CC4FF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="panelTop" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#103A63"/>
+      <stop offset="1" stop-color="#0B223E"/>
+    </linearGradient>
+    <linearGradient id="panelSide" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#071A30"/>
+      <stop offset="1" stop-color="#051221"/>
+    </linearGradient>
+    <linearGradient id="neon" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#65F0FF"/>
+      <stop offset="0.45" stop-color="#18BFFF"/>
+      <stop offset="1" stop-color="#0A7DCC"/>
+    </linearGradient>
+    <linearGradient id="teal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#44FFE1"/>
+      <stop offset="1" stop-color="#0E8FA7"/>
+    </linearGradient>
+    <linearGradient id="cubeFront" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#123D73"/>
+      <stop offset="1" stop-color="#0A1E39"/>
+    </linearGradient>
+    <linearGradient id="cubeTop" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1E71B3"/>
+      <stop offset="1" stop-color="#0C2F58"/>
+    </linearGradient>
+    <linearGradient id="cubeSide" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0A1930"/>
+      <stop offset="1" stop-color="#05111E"/>
+    </linearGradient>
+    <filter id="softGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="28" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="hardGlow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="18" result="b1"/>
+      <feGaussianBlur stdDeviation="42" result="b2"/>
+      <feMerge>
+        <feMergeNode in="b2"/>
+        <feMergeNode in="b1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="shadow" x="-20%" y="-20%" width="160%" height="180%">
+      <feDropShadow dx="0" dy="34" stdDeviation="40" flood-color="#000000" flood-opacity="0.40"/>
+    </filter>
+    <pattern id="grid" width="120" height="120" patternUnits="userSpaceOnUse">
+      <path d="M 120 0 L 0 0 0 120" stroke="#11406F" stroke-opacity="0.18" stroke-width="2"/>
+    </pattern>
+    <marker id="arrow" markerWidth="16" markerHeight="16" refX="12" refY="8" orient="auto">
+      <path d="M0 0 L16 8 L0 16 L4 8 Z" fill="#31D8FF"/>
+    </marker>
+    <style>
+      text { font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+      .title { font-size: 132px; font-weight: 700; letter-spacing: 6px; fill: #E8FCFF; }
+      .subtitle { font-size: 52px; font-weight: 500; letter-spacing: 3px; fill: #8DCBDB; }
+      .section { font-size: 64px; font-weight: 700; letter-spacing: 2px; fill: #D7F7FF; }
+      .label { font-size: 46px; font-weight: 600; letter-spacing: 1px; fill: #DFFBFF; }
+      .small { font-size: 34px; font-weight: 500; letter-spacing: 1px; fill: #8AC1CF; }
+      .tiny { font-size: 28px; font-weight: 500; fill: #72AFC2; }
+      .chip { fill: rgba(6, 21, 45, 0.7); stroke: #1AB6E6; stroke-width: 3; }
+    </style>
+  </defs>
+
+  <rect width="7680" height="4320" fill="url(#bg)"/>
+  <rect width="7680" height="4320" fill="url(#grid)" opacity="0.7"/>
+  <rect width="7680" height="4320" fill="url(#glowCenter)"/>
+
+  <g opacity="0.22">
+    <path d="M0 3380 C1420 2960, 2680 2920, 3820 3200 C5050 3500, 6420 3560, 7680 3220" stroke="#1A6AAE" stroke-width="4"/>
+    <path d="M0 3620 C1560 3160, 2960 3140, 4200 3460 C5320 3740, 6420 3780, 7680 3440" stroke="#144B82" stroke-width="4"/>
+    <path d="M0 2840 C1320 2540, 2680 2580, 4060 2860 C5340 3120, 6460 3140, 7680 2860" stroke="#0F395F" stroke-width="4"/>
+  </g>
+
+  <g>
+    <text x="3840" y="300" text-anchor="middle" class="title">RAG KNOWLEDGE PLATFORM</text>
+    <text x="3840" y="392" text-anchor="middle" class="subtitle">PaiSmart architecture • Isometric concept • Upload → Async pipeline → Hybrid retrieval → Streaming answer</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <polygon points="360,2820 1540,2500 2330,2950 1160,3270" fill="url(#panelTop)" stroke="#1CAAE2" stroke-opacity="0.6" stroke-width="6"/>
+    <polygon points="1160,3270 2330,2950 2330,3110 1160,3430" fill="url(#panelSide)"/>
+    <polygon points="1540,2500 2330,2950 2330,3110 1540,2660" fill="#08172C"/>
+    <text x="510" y="2470" class="section">Document Ingestion</text>
+    <text x="510" y="2540" class="small">PDF / Word / TXT / Markdown</text>
+  </g>
+
+  <g transform="translate(520 1680)">
+    <g filter="url(#shadow)">
+      <polygon points="0,340 250,270 420,370 170,440" fill="#143F73" stroke="#2BD0FF" stroke-width="5"/>
+      <polygon points="170,440 420,370 420,520 170,590" fill="#081A30"/>
+      <polygon points="250,270 420,370 420,520 250,420" fill="#0C2747"/>
+      <rect x="72" y="76" width="160" height="190" rx="18" fill="#E9F7FF"/>
+      <path d="M190 76 L232 118 L232 158 L190 158 Z" fill="#B8DBF5"/>
+      <text x="92" y="196" fill="#D03F55" font-size="54" font-weight="700">PDF</text>
+    </g>
+    <g transform="translate(270 -120)" filter="url(#shadow)">
+      <polygon points="0,340 250,270 420,370 170,440" fill="#143F73" stroke="#2BD0FF" stroke-width="5"/>
+      <polygon points="170,440 420,370 420,520 170,590" fill="#081A30"/>
+      <polygon points="250,270 420,370 420,520 250,420" fill="#0C2747"/>
+      <rect x="72" y="76" width="160" height="190" rx="18" fill="#E9F7FF"/>
+      <path d="M190 76 L232 118 L232 158 L190 158 Z" fill="#B8DBF5"/>
+      <text x="76" y="196" fill="#276BC2" font-size="46" font-weight="700">WORD</text>
+    </g>
+    <path d="M420 770 C540 820, 620 840, 770 826" stroke="url(#neon)" stroke-width="14" fill="none" marker-end="url(#arrow)" filter="url(#softGlow)"/>
+    <path d="M690 600 C790 650, 860 680, 980 700" stroke="url(#teal)" stroke-width="12" fill="none" marker-end="url(#arrow)" filter="url(#softGlow)"/>
+  </g>
+
+  <g transform="translate(1320 2020)" filter="url(#shadow)">
+    <polygon points="0,260 430,145 710,300 280,415" fill="#122E54" stroke="#2AD0FF" stroke-width="6"/>
+    <polygon points="280,415 710,300 710,560 280,675" fill="#081427"/>
+    <polygon points="430,145 710,300 710,560 430,405" fill="#0B2241"/>
+    <rect x="118" y="118" width="260" height="160" rx="26" fill="#0C223B" stroke="#35D9FF" stroke-width="4"/>
+    <path d="M165 198 H335" stroke="#35D9FF" stroke-width="10" stroke-linecap="round"/>
+    <path d="M165 236 H305" stroke="#35D9FF" stroke-width="10" stroke-linecap="round" opacity="0.8"/>
+    <text x="160" y="518" class="label">Go / Gin Upload API</text>
+    <text x="160" y="575" class="small">chunk verify • md5 • merge trigger</text>
+  </g>
+
+  <g transform="translate(1880 1760)" filter="url(#shadow)">
+    <polygon points="0,330 420,220 710,380 290,490" fill="#13345F" stroke="#33D7FF" stroke-width="6"/>
+    <polygon points="290,490 710,380 710,700 290,810" fill="#081428"/>
+    <polygon points="420,220 710,380 710,700 420,540" fill="#0A2241"/>
+    <rect x="140" y="132" width="250" height="180" rx="24" fill="#0C1F38" stroke="#34E3FF" stroke-width="5"/>
+    <path d="M182 248 C214 190, 304 170, 348 208 C390 244, 384 334, 280 336 C194 336, 160 286, 182 248 Z" fill="#1AB8D7" opacity="0.35"/>
+    <path d="M218 208 C238 164, 328 162, 356 206 C372 232, 366 282, 322 298 C332 246, 286 214, 218 208 Z" fill="#52EDFF" opacity="0.55"/>
+    <text x="148" y="620" class="label">MinIO Object Storage</text>
+    <text x="148" y="678" class="small">merged files • chunk objects • parsed text cache</text>
+  </g>
+
+  <path d="M1980 2440 C2140 2360, 2200 2280, 2350 2060" stroke="url(#neon)" stroke-width="16" fill="none" marker-end="url(#arrow)" filter="url(#hardGlow)"/>
+
+  <g filter="url(#shadow)">
+    <polygon points="2330,2810 4040,2390 5040,2940 3340,3360" fill="url(#panelTop)" stroke="#24BDE9" stroke-opacity="0.65" stroke-width="6"/>
+    <polygon points="3340,3360 5040,2940 5040,3120 3340,3540" fill="url(#panelSide)"/>
+    <polygon points="4040,2390 5040,2940 5040,3120 4040,2570" fill="#07172C"/>
+    <text x="2490" y="2350" class="section">Async Processing Pipeline</text>
+    <text x="2490" y="2422" class="small">upload → parse → chunk → embedding → index</text>
+  </g>
+
+  <g transform="translate(2570 1960)">
+    <g filter="url(#shadow)">
+      <polygon points="0,300 270,228 448,326 180,396" fill="#153E72" stroke="#2ED5FF" stroke-width="5"/>
+      <polygon points="180,396 448,326 448,548 180,618" fill="#07182C"/>
+      <polygon points="270,228 448,326 448,548 270,450" fill="#0D2747"/>
+      <rect x="96" y="122" width="135" height="84" rx="18" fill="#0B2038" stroke="#39D5FF" stroke-width="3"/>
+      <text x="84" y="500" class="label">Tika Parse</text>
+      <text x="84" y="548" class="tiny">extract text</text>
+    </g>
+    <g transform="translate(430 90)" filter="url(#shadow)">
+      <polygon points="0,300 270,228 448,326 180,396" fill="#153E72" stroke="#2ED5FF" stroke-width="5"/>
+      <polygon points="180,396 448,326 448,548 180,618" fill="#07182C"/>
+      <polygon points="270,228 448,326 448,548 270,450" fill="#0D2747"/>
+      <rect x="104" y="110" width="122" height="108" rx="18" fill="#0B2038" stroke="#39D5FF" stroke-width="3"/>
+      <path d="M132 140 H200" stroke="#39D5FF" stroke-width="8" stroke-linecap="round"/>
+      <path d="M132 172 H186" stroke="#39D5FF" stroke-width="8" stroke-linecap="round"/>
+      <path d="M132 204 H210" stroke="#39D5FF" stroke-width="8" stroke-linecap="round"/>
+      <text x="86" y="500" class="label">Chunk Split</text>
+      <text x="86" y="548" class="tiny">1000 / overlap 100</text>
+    </g>
+    <g transform="translate(860 178)" filter="url(#shadow)">
+      <polygon points="0,300 270,228 448,326 180,396" fill="#153E72" stroke="#2ED5FF" stroke-width="5"/>
+      <polygon points="180,396 448,326 448,548 180,618" fill="#07182C"/>
+      <polygon points="270,228 448,326 448,548 270,450" fill="#0D2747"/>
+      <circle cx="170" cy="165" r="60" fill="none" stroke="#41DFFF" stroke-width="8"/>
+      <circle cx="170" cy="165" r="24" fill="#53F1FF"/>
+      <path d="M170 105 V53 M224 138 L268 112 M224 192 L270 214 M170 225 V280 M116 192 L68 220 M116 138 L68 112" stroke="#41DFFF" stroke-width="8" stroke-linecap="round"/>
+      <text x="44" y="500" class="label">Embedding API</text>
+      <text x="44" y="548" class="tiny">batch vectorization</text>
+    </g>
+    <g transform="translate(1290 270)" filter="url(#shadow)">
+      <polygon points="0,300 270,228 448,326 180,396" fill="#153E72" stroke="#2ED5FF" stroke-width="5"/>
+      <polygon points="180,396 448,326 448,548 180,618" fill="#07182C"/>
+      <polygon points="270,228 448,326 448,548 270,450" fill="#0D2747"/>
+      <rect x="102" y="120" width="132" height="96" rx="14" fill="#0B2038" stroke="#39D5FF" stroke-width="4"/>
+      <path d="M130 144 H206 M130 176 H206 M130 208 H206" stroke="#39D5FF" stroke-width="8" stroke-linecap="round"/>
+      <text x="96" y="500" class="label">ES Index</text>
+      <text x="96" y="548" class="tiny">bulk index write</text>
+    </g>
+  </g>
+
+  <g filter="url(#hardGlow)">
+    <path d="M2940 2564 C3170 2540, 3310 2580, 3470 2650" stroke="url(#neon)" stroke-width="14" fill="none" marker-end="url(#arrow)"/>
+    <path d="M3370 2660 C3590 2640, 3730 2672, 3895 2746" stroke="url(#neon)" stroke-width="14" fill="none" marker-end="url(#arrow)"/>
+    <path d="M3812 2750 C4030 2726, 4160 2760, 4328 2828" stroke="url(#neon)" stroke-width="14" fill="none" marker-end="url(#arrow)"/>
+  </g>
+
+  <g transform="translate(3040 1760)" filter="url(#hardGlow)">
+    <polygon points="0,0 720,-170 1490,180 770,350" fill="rgba(9, 28, 52, 0.78)" stroke="#24C5F3" stroke-width="6"/>
+    <text x="750" y="78" text-anchor="middle" class="section">Kafka 异步解耦</text>
+    <text x="750" y="150" text-anchor="middle" class="small">buffering • retry • decouple upload from heavy processing</text>
+    <g transform="translate(170 64)">
+      <circle cx="0" cy="0" r="16" fill="#4CF4FF"/>
+      <circle cx="145" cy="-34" r="16" fill="#4CF4FF"/>
+      <circle cx="290" cy="-10" r="16" fill="#4CF4FF"/>
+      <circle cx="435" cy="-42" r="16" fill="#4CF4FF"/>
+      <circle cx="580" cy="-14" r="16" fill="#4CF4FF"/>
+      <circle cx="725" cy="-38" r="16" fill="#4CF4FF"/>
+      <circle cx="870" cy="-8" r="16" fill="#4CF4FF"/>
+      <path d="M0 0 C120 -64, 210 22, 290 -10 C372 -44, 470 10, 580 -14 C666 -32, 772 -6, 870 -8" stroke="#53E8FF" stroke-width="10" fill="none"/>
+    </g>
+  </g>
+
+  <g filter="url(#hardGlow)">
+    <polygon points="4300,1620 4860,1480 5330,1745 4760,1888" fill="url(#cubeTop)" stroke="#40DBFF" stroke-width="10"/>
+    <polygon points="4760,1888 5330,1745 5330,2555 4760,2698" fill="url(#cubeSide)" stroke="#2FC8F7" stroke-width="10"/>
+    <polygon points="4300,1620 4760,1888 4760,2698 4300,2430" fill="url(#cubeFront)" stroke="#4BE6FF" stroke-width="10"/>
+    <path d="M4540 1556 V2588 M4420 1592 L4978 1912 M4414 1770 L4992 2104 M4408 1958 L4978 2284 M4410 2144 L4986 2468" stroke="#6FF7FF" stroke-opacity="0.38" stroke-width="6"/>
+    <circle cx="4826" cy="1902" r="20" fill="#58F4FF"/>
+    <circle cx="4688" cy="1992" r="18" fill="#58F4FF"/>
+    <circle cx="4570" cy="2084" r="16" fill="#58F4FF"/>
+    <text x="4518" y="2158" class="section">ES 混合检索与向量数据库</text>
+    <text x="4518" y="2242" class="label">BM25 + dense_vector + Rescore</text>
+    <text x="4518" y="2312" class="small">knowledge_base index • semantic recall • keyword fallback</text>
+  </g>
+
+  <path d="M4550 2850 C4420 3120, 4240 3250, 3980 3315" stroke="url(#teal)" stroke-width="16" fill="none" marker-end="url(#arrow)" filter="url(#softGlow)"/>
+  <text x="4070" y="3210" class="small">Hybrid retrieval output</text>
+
+  <g transform="translate(5100 3000)" filter="url(#shadow)">
+    <polygon points="0,180 290,100 470,200 180,280" fill="#102A49" stroke="#2AD0FF" stroke-width="5"/>
+    <polygon points="180,280 470,200 470,430 180,510" fill="#071426"/>
+    <polygon points="290,100 470,200 470,430 290,330" fill="#0B2140"/>
+    <text x="76" y="390" class="label">Redis</text>
+    <text x="76" y="438" class="tiny">chat history • upload bitmap • embedding cache</text>
+  </g>
+
+  <g transform="translate(5620 3110)" filter="url(#shadow)">
+    <polygon points="0,180 290,100 470,200 180,280" fill="#102A49" stroke="#2AD0FF" stroke-width="5"/>
+    <polygon points="180,280 470,200 470,430 180,510" fill="#071426"/>
+    <polygon points="290,100 470,200 470,430 290,330" fill="#0B2140"/>
+    <text x="76" y="390" class="label">MySQL</text>
+    <text x="76" y="438" class="tiny">file metadata • chunk_info • pipeline_task</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <polygon points="5310,2810 7100,2390 7380,2740 5600,3160" fill="url(#panelTop)" stroke="#21C0EE" stroke-opacity="0.65" stroke-width="6"/>
+    <polygon points="5600,3160 7380,2740 7380,2915 5600,3335" fill="url(#panelSide)"/>
+    <polygon points="7100,2390 7380,2740 7380,2915 7100,2565" fill="#07172C"/>
+    <text x="5450" y="2350" class="section">Streaming Interaction</text>
+    <text x="5450" y="2422" class="small">WebSocket realtime delivery • DeepSeek stream completion</text>
+  </g>
+
+  <g transform="translate(5600 1730)">
+    <g filter="url(#shadow)">
+      <polygon points="0,530 590,380 1030,624 440,772" fill="#12345D" stroke="#34D8FF" stroke-width="6"/>
+      <polygon points="440,772 1030,624 1030,1310 440,1458" fill="#071427"/>
+      <polygon points="590,380 1030,624 1030,1310 590,1066" fill="#0B2140"/>
+      <rect x="150" y="140" width="560" height="760" rx="28" fill="#081A30" stroke="#44E1FF" stroke-width="6"/>
+      <rect x="184" y="176" width="492" height="88" rx="18" fill="#0C243F"/>
+      <circle cx="226" cy="220" r="10" fill="#41DDFF"/>
+      <circle cx="264" cy="220" r="10" fill="#1EA6DC"/>
+      <circle cx="302" cy="220" r="10" fill="#0F7FB2"/>
+      <rect x="214" y="320" width="250" height="110" rx="20" fill="#0B2748" stroke="#1BB8E8" stroke-width="3"/>
+      <rect x="364" y="474" width="264" height="120" rx="20" fill="#11385E" stroke="#42E9FF" stroke-width="3"/>
+      <rect x="214" y="652" width="414" height="64" rx="18" fill="#091E35" stroke="#1AB8E8" stroke-width="3"/>
+      <path d="M246 684 H596" stroke="#52EFFF" stroke-width="8" stroke-linecap="round" stroke-dasharray="22 18"/>
+      <text x="210" y="1014" class="label">WebSocket Realtime UI</text>
+      <text x="210" y="1072" class="small">chunk stream • completion state • interactive chat</text>
+    </g>
+
+    <g transform="translate(700 -120)" filter="url(#hardGlow)">
+      <circle cx="270" cy="410" r="186" fill="#0A2038" stroke="#43E1FF" stroke-width="8"/>
+      <circle cx="270" cy="410" r="118" fill="url(#neon)" opacity="0.28"/>
+      <path d="M192 420 C240 328, 364 326, 398 416 C420 472, 398 560, 300 588 C350 530, 332 460, 286 430 C260 412, 228 404, 192 420 Z" fill="#5DF8FF" opacity="0.65"/>
+      <path d="M202 336 C244 286, 322 280, 374 326" stroke="#7FFFFD" stroke-width="12" stroke-linecap="round"/>
+      <path d="M196 510 C246 548, 336 550, 396 500" stroke="#7FFFFD" stroke-width="12" stroke-linecap="round"/>
+      <text x="98" y="718" class="label">DeepSeek LLM</text>
+      <text x="98" y="776" class="small">stream chat completions</text>
+    </g>
+  </g>
+
+  <g filter="url(#hardGlow)">
+    <path d="M5050 2190 C5440 2140, 5780 2110, 6180 2190" stroke="url(#neon)" stroke-width="16" fill="none" marker-end="url(#arrow)"/>
+    <path d="M6180 2470 C6490 2330, 6800 2270, 7020 2260" stroke="url(#teal)" stroke-width="16" fill="none" marker-end="url(#arrow)"/>
+    <path d="M7080 2100 C7030 1880, 7050 1700, 7200 1500" stroke="url(#neon)" stroke-width="14" fill="none" marker-end="url(#arrow)"/>
+  </g>
+  <text x="5488" y="2092" class="small">retrieval context</text>
+  <text x="6438" y="2382" class="small">WebSocket stream</text>
+
+  <g transform="translate(5860 1230)">
+    <rect x="0" y="0" width="730" height="220" rx="38" fill="#07192F" stroke="#29C8F3" stroke-width="5" filter="url(#hardGlow)"/>
+    <text x="46" y="80" class="label">RAG Orchestration</text>
+    <text x="46" y="142" class="small">Go / Gin service • query embedding • hybrid search • prompt assembly</text>
+    <text x="46" y="190" class="tiny">chat_service + search_service + llm stream</text>
+  </g>
+
+  <g opacity="0.92">
+    <rect x="296" y="3920" width="3020" height="198" rx="36" fill="#07182E" stroke="#1CB4E6" stroke-width="4"/>
+    <rect x="3360" y="3920" width="2024" height="198" rx="36" fill="#07182E" stroke="#1CB4E6" stroke-width="4"/>
+    <rect x="5430" y="3920" width="1954" height="198" rx="36" fill="#07182E" stroke="#1CB4E6" stroke-width="4"/>
+    <text x="380" y="4002" class="label">Left: Multi-format enterprise documents land in MinIO after chunk upload, MD5 verification and merge</text>
+    <text x="380" y="4070" class="small">Actual project flow: Upload API → chunk_info / Redis bitmap → MinIO merged object → Kafka trigger</text>
+    <text x="3440" y="4002" class="label">Center: Kafka decouples parse, chunk, embedding and index into a recoverable async pipeline</text>
+    <text x="3440" y="4070" class="small">Actual project flow: Tika Parse → Chunk Split → Embedding API → Elasticsearch knowledge_base</text>
+    <text x="5510" y="4002" class="label">Right: WebSocket delivers DeepSeek stream responses built from ES hybrid retrieval context</text>
+    <text x="5510" y="4070" class="small">Actual project flow: SearchService HybridSearch → ChatService StreamResponse → frontend realtime UI</text>
+  </g>
+</svg>

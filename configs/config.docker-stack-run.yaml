@@ -1,0 +1,103 @@
+server:
+  port: "8080"
+  mode: "debug"
+
+database:
+  mysql:
+    dsn: "root:PaiSmart2025@tcp(mysql:3306)/PaiSmart?charset=utf8mb4&parseTime=True&loc=Local"
+  redis:
+    addr: "redis:6379"
+    password: "PaiSmart2025"
+    db: 0
+
+jwt:
+  secret: "PXrQbuCwXwOZzkML/Vm2S5rSwt1iybvmKtGDzVEu+Hc="
+  access_token_expire_hours: 24
+  refresh_token_expire_days: 7
+
+log:
+  level: "debug"
+  format: "json"
+  output_path: "./logs"
+
+kafka:
+  brokers: "kafka:29092"
+  topic: "file-parse"
+  consumer_group_prefix: "paismart-go-docker-stack"
+  max_retries: 3
+  base_backoff_ms: 800
+  embedding_batch_size: 8
+  es_bulk_batch_size: 100
+  topics:
+    parse: "file-parse"
+    chunk: "file-chunk"
+    embed: "file-embed"
+    index: "file-index"
+    dlq: "file-dlq"
+
+minio:
+  endpoint: "minio:9000"
+  access_key_id: "minioadmin"
+  secret_access_key: "minioadmin"
+  use_ssl: false
+  bucket_name: "uploads"
+
+tika:
+  server_url: "http://tika:9998"
+
+elasticsearch:
+  addresses: "http://es:9200"
+  username: ""
+  password: ""
+  index_name: "knowledge_base_docker_stack"
+
+embedding:
+  model: "text-embedding-v4"
+  api_key: "sk-0540e78537ed4394901cfc81627fe2a6"
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  dimensions: 2048
+
+llm:
+  base_url: "https://api.deepseek.com/v1"
+  model: "deepseek-chat"
+  api_key: "sk-eb5f204730714958aabbb2796094fcc9"
+  prompt:
+    rules: |
+      你是企业知识库问答助手。
+      1. 使用简体中文回答。
+      2. 优先基于检索上下文回答。
+      3. 如果检索上下文不足，明确说明。
+    ref_start: "<<REF>>"
+    ref_end: "<<END>>"
+    no_result_text: "（本轮无检索结果）"
+  generation:
+    temperature: 0.3
+    max_tokens: 1200
+    top_p: 0.9
+
+agent:
+  enabled: true
+  base_url: "http://host.docker.internal:11434"
+  api_key: ""
+  model: "qwen3:4b"
+  native_ollama: true
+  context_window: 1024
+  timeout_ms: 60000
+  max_sub_queries: 2
+  history_turns: 6
+  temperature: 0.1
+  max_tokens: 256
+
+retrieval:
+  bm25_topn: 100
+  vector_topn: 100
+  rrf_k: 60
+  rerank_topn: 100
+  final_topk: 5
+  rerank_timeout_ms: 120
+
+reranker:
+  enabled: false
+  base_url: ""
+  api_key: ""
+  model: ""

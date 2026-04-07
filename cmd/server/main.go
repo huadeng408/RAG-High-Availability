@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,12 +22,14 @@ import (
 	"pai-smart-go/internal/pipeline"
 	"pai-smart-go/internal/repository"
 	"pai-smart-go/internal/service"
+	agentclient "pai-smart-go/pkg/agent"
 	"pai-smart-go/pkg/database"
 	"pai-smart-go/pkg/embedding"
 	"pai-smart-go/pkg/es"
 	"pai-smart-go/pkg/kafka"
 	"pai-smart-go/pkg/llm"
 	"pai-smart-go/pkg/log"
+	"pai-smart-go/pkg/reranker"
 	"pai-smart-go/pkg/storage"
 	"pai-smart-go/pkg/tika"
 	"pai-smart-go/pkg/token"
@@ -35,7 +38,11 @@ import (
 )
 
 func main() {
-	config.Init("./configs/config.yaml")
+	configPath := strings.TrimSpace(os.Getenv("PAISMART_CONFIG"))
+	if configPath == "" {
+		configPath = "./configs/config.yaml"
+	}
+	config.Init(configPath)
 	cfg := config.Conf
 
 	log.Init(cfg.Log.Level, cfg.Log.Format, cfg.Log.OutputPath)
@@ -43,13 +50,17 @@ func main() {
 
 	database.InitMySQL(cfg.Database.MySQL.DSN)
 	database.InitRedis(cfg.Database.Redis.Addr, cfg.Database.Redis.Password, cfg.Database.Redis.DB)
+	if err := database.EnsureRuntimeSchema(); err != nil {
+		log.Errorf("failed to apply runtime schema migration: %v", err)
+		return
+	}
 	if err := database.DB.AutoMigrate(&model.PipelineTask{}); err != nil {
 		log.Errorf("failed to migrate pipeline_task table: %v", err)
 		return
 	}
 
 	storage.InitMinIO(cfg.MinIO)
-	if err := es.InitES(cfg.Elasticsearch); err != nil {
+	if err := es.InitES(cfg.Elasticsearch, cfg.Embedding.Dimensions); err != nil {
 		log.Errorf("failed to init elasticsearch: %v", err)
 		return
 	}
@@ -66,14 +77,25 @@ func main() {
 	tikaClient := tika.NewClient(cfg.Tika)
 	embeddingClient := embedding.NewClient(cfg.Embedding)
 	llmClient := llm.NewClient(cfg.LLM)
+	agentPlannerClient := agentclient.NewClient(cfg.Agent)
+	rerankerClient := reranker.NewClient(cfg.Reranker)
 
 	userService := service.NewUserService(userRepository, orgTagRepo, jwtManager)
 	adminService := service.NewAdminService(orgTagRepo, userRepository, conversationRepo, pipelineTaskRepo, uploadRepo)
 	uploadService := service.NewUploadService(uploadRepo, userRepository, cfg.MinIO)
 	documentService := service.NewDocumentService(uploadRepo, userRepository, orgTagRepo, cfg.MinIO, tikaClient)
-	searchService := service.NewSearchService(embeddingClient, es.ESClient, userService, uploadRepo)
+	searchService := service.NewSearchService(
+		embeddingClient,
+		rerankerClient,
+		es.ESClient,
+		userService,
+		uploadRepo,
+		cfg.Elasticsearch.IndexName,
+		cfg.Retrieval,
+	)
 	conversationService := service.NewConversationService(conversationRepo)
-	chatService := service.NewChatService(searchService, llmClient, conversationRepo)
+	agentService := service.NewAgentService(agentPlannerClient, cfg.Agent)
+	chatService := service.NewChatService(searchService, agentService, llmClient, conversationRepo)
 
 	processor := pipeline.NewProcessor(
 		tikaClient,

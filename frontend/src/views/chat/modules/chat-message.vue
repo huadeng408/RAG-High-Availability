@@ -17,7 +17,7 @@ function handleCopy(content: string) {
 const chatStore = useChatStore();
 
 // 存储文件名和对应的事件处理
-const sourceFiles = ref<Array<{fileName: string, id: string}>>([]);
+const sourceFiles = ref<Array<{ fileName: string; id: string }>>([]);
 
 // 处理来源文件链接的函数
 function processSourceLinks(text: string): string {

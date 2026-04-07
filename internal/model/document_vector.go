@@ -7,7 +7,7 @@ type DocumentVector struct {
 	FileMD5      string `gorm:"type:varchar(32);not null;index;column:file_md5"`
 	ChunkID      int    `gorm:"not null;column:chunk_id"`
 	TextContent  string `gorm:"type:text;column:text_content"`
-	ModelVersion string `gorm:"type:varchar(50);column:model_version"`
+	ModelVersion string `gorm:"type:varchar(128);column:model_version"`
 	UserID       uint   `gorm:"not null;column:user_id"`
 	OrgTag       string `gorm:"type:varchar(50);column:org_tag"`
 	IsPublic     bool   `gorm:"not null;default:false;column:is_public"`

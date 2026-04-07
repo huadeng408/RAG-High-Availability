@@ -22,6 +22,9 @@ type Config struct {
 	MinIO         MinIOConfig         `mapstructure:"minio"`
 	Embedding     EmbeddingConfig     `mapstructure:"embedding"`
 	LLM           LLMConfig           `mapstructure:"llm"`
+	Agent         AgentConfig         `mapstructure:"agent"`
+	Retrieval     RetrievalConfig     `mapstructure:"retrieval"`
+	Reranker      RerankerConfig      `mapstructure:"reranker"`
 	AI            AIConfig            `mapstructure:"ai"`
 }
 
@@ -65,14 +68,14 @@ type LogConfig struct {
 
 // KafkaConfig 存储 Kafka 相关的配置。
 type KafkaConfig struct {
-	Brokers             string                 `mapstructure:"brokers"`
-	Topic               string                 `mapstructure:"topic"`
-	Topics              KafkaTopicsConfig      `mapstructure:"topics"`
-	ConsumerGroupPrefix string                 `mapstructure:"consumer_group_prefix"`
-	MaxRetries          int                    `mapstructure:"max_retries"`
-	BaseBackoffMs       int                    `mapstructure:"base_backoff_ms"`
-	EmbeddingBatchSize  int                    `mapstructure:"embedding_batch_size"`
-	ESBulkBatchSize     int                    `mapstructure:"es_bulk_batch_size"`
+	Brokers             string            `mapstructure:"brokers"`
+	Topic               string            `mapstructure:"topic"`
+	Topics              KafkaTopicsConfig `mapstructure:"topics"`
+	ConsumerGroupPrefix string            `mapstructure:"consumer_group_prefix"`
+	MaxRetries          int               `mapstructure:"max_retries"`
+	BaseBackoffMs       int               `mapstructure:"base_backoff_ms"`
+	EmbeddingBatchSize  int               `mapstructure:"embedding_batch_size"`
+	ESBulkBatchSize     int               `mapstructure:"es_bulk_batch_size"`
 }
 
 type KafkaTopicsConfig struct {
@@ -122,6 +125,20 @@ type LLMConfig struct {
 	Prompt     LLMPromptConfig     `mapstructure:"prompt"`
 }
 
+type AgentConfig struct {
+	Enabled       bool    `mapstructure:"enabled"`
+	BaseURL       string  `mapstructure:"base_url"`
+	APIKey        string  `mapstructure:"api_key"`
+	Model         string  `mapstructure:"model"`
+	NativeOllama  bool    `mapstructure:"native_ollama"`
+	ContextWindow int     `mapstructure:"context_window"`
+	TimeoutMs     int     `mapstructure:"timeout_ms"`
+	MaxSubQueries int     `mapstructure:"max_sub_queries"`
+	HistoryTurns  int     `mapstructure:"history_turns"`
+	Temperature   float64 `mapstructure:"temperature"`
+	MaxTokens     int     `mapstructure:"max_tokens"`
+}
+
 // LLMGenerationConfig 配置生成相关参数（可选）。
 type LLMGenerationConfig struct {
 	Temperature float64 `mapstructure:"temperature"`
@@ -135,6 +152,22 @@ type LLMPromptConfig struct {
 	RefStart     string `mapstructure:"ref_start"`
 	RefEnd       string `mapstructure:"ref_end"`
 	NoResultText string `mapstructure:"no_result_text"`
+}
+
+type RetrievalConfig struct {
+	BM25TopN        int `mapstructure:"bm25_topn"`
+	VectorTopN      int `mapstructure:"vector_topn"`
+	RRFK            int `mapstructure:"rrf_k"`
+	RerankTopN      int `mapstructure:"rerank_topn"`
+	FinalTopK       int `mapstructure:"final_topk"`
+	RerankTimeoutMs int `mapstructure:"rerank_timeout_ms"`
+}
+
+type RerankerConfig struct {
+	Enabled bool   `mapstructure:"enabled"`
+	BaseURL string `mapstructure:"base_url"`
+	APIKey  string `mapstructure:"api_key"`
+	Model   string `mapstructure:"model"`
 }
 
 // AIConfig 对齐 Java 的 ai.prompt/ai.generation（连字符键）

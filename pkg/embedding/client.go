@@ -11,6 +11,7 @@ import (
 	"pai-smart-go/internal/config"
 	"pai-smart-go/pkg/log"
 	"strings"
+	"time"
 )
 
 // Client defines the interface for an embedding client.
@@ -44,6 +45,19 @@ type embeddingResponse struct {
 	} `json:"data"`
 }
 
+type apiError struct {
+	statusCode int
+	statusText string
+	body       string
+}
+
+func (e *apiError) Error() string {
+	if strings.TrimSpace(e.body) == "" {
+		return fmt.Sprintf("embedding api returned non-200 status: %s", e.statusText)
+	}
+	return fmt.Sprintf("embedding api returned non-200 status: %s, body: %s", e.statusText, strings.TrimSpace(e.body))
+}
+
 // CreateEmbedding calls the OpenAI-compatible API to get the vector for a given text.
 func (c *openAICompatibleClient) CreateEmbedding(ctx context.Context, text string) ([]float32, error) {
 	vectors, err := c.CreateEmbeddings(ctx, []string{text})
@@ -60,53 +74,94 @@ func (c *openAICompatibleClient) CreateEmbeddings(ctx context.Context, texts []s
 	if len(texts) == 0 {
 		return [][]float32{}, nil
 	}
-	log.Infof("[EmbeddingClient] 开始调用 Embedding API, model: %s, batch_size: %d", c.cfg.Model, len(texts))
+
+	log.Infof("[EmbeddingClient] create embeddings start, model=%s batch=%d", c.cfg.Model, len(texts))
 	reqBody := embeddingRequest{
-		Model: c.cfg.Model, // Use model from config
+		Model: c.cfg.Model,
 		Input: texts,
 	}
-	if shouldSendDimensions(c.cfg) {
+	if c.cfg.Dimensions > 0 {
 		reqBody.Dimensions = c.cfg.Dimensions
 	}
 
+	vectors, err := c.createEmbeddingsWithRetry(ctx, reqBody)
+	if err == nil {
+		return vectors, nil
+	}
+
+	if reqBody.Dimensions > 0 && isDimensionsUnsupported(err) {
+		log.Warnf("[EmbeddingClient] dimensions=%d unsupported by provider, retrying without dimensions", reqBody.Dimensions)
+		reqBody.Dimensions = 0
+		return c.createEmbeddingsWithRetry(ctx, reqBody)
+	}
+
+	return nil, err
+}
+
+func (c *openAICompatibleClient) createEmbeddingsWithRetry(ctx context.Context, reqBody embeddingRequest) ([][]float32, error) {
+	const maxAttempts = 3
+	baseBackoff := 250 * time.Millisecond
+
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		vectors, err := c.createEmbeddingsOnce(ctx, reqBody)
+		if err == nil {
+			return vectors, nil
+		}
+		lastErr = err
+
+		if !isRetriableEmbeddingError(err) || attempt == maxAttempts {
+			break
+		}
+
+		backoff := baseBackoff * time.Duration(1<<(attempt-1))
+		log.Warnf("[EmbeddingClient] transient error (attempt=%d/%d), retry in %s: %v", attempt, maxAttempts, backoff, err)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+	}
+
+	return nil, lastErr
+}
+
+func (c *openAICompatibleClient) createEmbeddingsOnce(ctx context.Context, reqBody embeddingRequest) ([][]float32, error) {
 	reqBytes, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal embedding request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.cfg.BaseURL+"/embeddings", bytes.NewReader(reqBytes))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL+"/embeddings", bytes.NewReader(reqBytes))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create embedding request: %w", err)
 	}
-
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		log.Errorf("[EmbeddingClient] 调用 Embedding API 失败, error: %v", err)
 		return nil, fmt.Errorf("failed to call embedding api: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		bodyText := strings.TrimSpace(string(body))
-		log.Errorf("[EmbeddingClient] Embedding API 返回非 200 状态码: %s, body: %s", resp.Status, bodyText)
-		if bodyText == "" {
-			return nil, fmt.Errorf("embedding api returned non-200 status: %s", resp.Status)
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		apiErr := &apiError{
+			statusCode: resp.StatusCode,
+			statusText: resp.Status,
+			body:       string(bodyBytes),
 		}
-		return nil, fmt.Errorf("embedding api returned non-200 status: %s, body: %s", resp.Status, bodyText)
+		log.Errorf("[EmbeddingClient] %v", apiErr)
+		return nil, apiErr
 	}
 
 	var embeddingResp embeddingResponse
 	if err := json.NewDecoder(resp.Body).Decode(&embeddingResp); err != nil {
-		log.Errorf("[EmbeddingClient] 解析 Embedding API 响应失败, error: %v", err)
 		return nil, fmt.Errorf("failed to decode embedding response: %w", err)
 	}
 
 	if len(embeddingResp.Data) == 0 || len(embeddingResp.Data[0].Embedding) == 0 {
-		log.Warnf("[EmbeddingClient] Embedding API 返回了空的向量数据")
 		return nil, fmt.Errorf("received empty embedding from api")
 	}
 
@@ -117,21 +172,44 @@ func (c *openAICompatibleClient) CreateEmbeddings(ctx context.Context, texts []s
 		}
 		vectors = append(vectors, item.Embedding)
 	}
-	log.Infof("[EmbeddingClient] 成功从 Embedding API 获取向量, count: %d, dim: %d", len(vectors), len(vectors[0]))
+	log.Infof("[EmbeddingClient] create embeddings success, count=%d dim=%d", len(vectors), len(vectors[0]))
 	return vectors, nil
 }
 
-func shouldSendDimensions(cfg config.EmbeddingConfig) bool {
-	if cfg.Dimensions <= 0 {
-		return false
+func isRetriableEmbeddingError(err error) bool {
+	var apiErr *apiError
+	if !asAPIError(err, &apiErr) {
+		// network/decode errors are retriable
+		return true
 	}
 
-	baseURL := strings.ToLower(cfg.BaseURL)
-	model := strings.ToLower(cfg.Model)
-
-	if strings.Contains(baseURL, "dashscope.aliyuncs.com") || strings.Contains(model, "text-embedding-v4") {
+	switch apiErr.statusCode {
+	case http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
 		return false
 	}
+}
 
+func isDimensionsUnsupported(err error) bool {
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "dimensions") && (strings.Contains(msg, "unsupported") || strings.Contains(msg, "unknown") || strings.Contains(msg, "invalid")) {
+		return true
+	}
+	if strings.Contains(msg, "invalid_parameter") && strings.Contains(msg, "dimensions") {
+		return true
+	}
+	return false
+}
+
+func asAPIError(err error, out **apiError) bool {
+	if err == nil {
+		return false
+	}
+	v, ok := err.(*apiError)
+	if !ok {
+		return false
+	}
+	*out = v
 	return true
 }

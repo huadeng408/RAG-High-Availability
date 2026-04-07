@@ -1,5 +1,5 @@
-import { request } from '../request';
 import { localStg } from '@/utils/storage';
+import { request } from '../request';
 
 /**
  * Login

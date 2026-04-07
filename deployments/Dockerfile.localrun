@@ -1,0 +1,10 @@
+FROM golang:1.24-alpine
+
+WORKDIR /app
+
+COPY deployments/server-linux /app/server
+COPY configs /app/configs
+
+EXPOSE 8080
+
+ENTRYPOINT ["/app/server"]

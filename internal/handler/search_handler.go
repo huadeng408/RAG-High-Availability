@@ -2,57 +2,67 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
+
+	"pai-smart-go/internal/config"
 	"pai-smart-go/internal/model"
 	"pai-smart-go/internal/service"
 	"pai-smart-go/pkg/log"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
 
-// SearchHandler 结构体定义了搜索相关的处理器。
 type SearchHandler struct {
 	searchService service.SearchService
 }
 
-// NewSearchHandler 创建一个新的 SearchHandler 实例。
 func NewSearchHandler(searchService service.SearchService) *SearchHandler {
 	return &SearchHandler{
 		searchService: searchService,
 	}
 }
 
-// HybridSearch 是处理混合搜索请求的 Gin 处理函数。
 func (h *SearchHandler) HybridSearch(c *gin.Context) {
 	query := c.Query("query")
-	log.Infof("[SearchHandler] 收到混合搜索请求, query: %s", query)
+	log.Infof("[SearchHandler] receive hybrid search request, query=%s", query)
 
 	if query == "" {
-		log.Warnf("[SearchHandler] 搜索请求失败: query 参数为空")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的查询参数"})
+		log.Warnf("[SearchHandler] hybrid search rejected: empty query")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid query"})
 		return
 	}
-	topKStr := c.DefaultQuery("topK", "10")
+
+	defaultTopK := config.Conf.Retrieval.FinalTopK
+	if defaultTopK <= 0 {
+		defaultTopK = 5
+	}
+
+	topKStr := c.DefaultQuery("topK", strconv.Itoa(defaultTopK))
 	topK, err := strconv.Atoi(topKStr)
 	if err != nil || topK <= 0 {
-		topK = 10
+		topK = defaultTopK
 	}
-	log.Infof("[SearchHandler] 解析参数, topK: %d", topK)
+	disableRerank, _ := strconv.ParseBool(c.DefaultQuery("disableRerank", "false"))
 
 	user, exists := c.Get("user")
 	if !exists {
-		log.Errorf("[SearchHandler] 无法从 Gin 上下文中获取用户信息")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法获取用户信息"})
+		log.Errorf("[SearchHandler] failed to load user from gin context")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load user"})
 		return
 	}
 
-	results, err := h.searchService.HybridSearch(c.Request.Context(), query, topK, user.(*model.User))
+	searchCtx := c.Request.Context()
+	if disableRerank {
+		searchCtx = service.WithRerankDisabled(searchCtx)
+	}
+
+	results, err := h.searchService.HybridSearch(searchCtx, query, topK, user.(*model.User))
 	if err != nil {
-		log.Errorf("[SearchHandler] 混合搜索服务返回错误, error: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "搜索失败"})
+		log.Errorf("[SearchHandler] hybrid search failed, query=%q topK=%d disableRerank=%t err=%v", query, topK, disableRerank, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "search failed"})
 		return
 	}
 
-	log.Infof("[SearchHandler] 混合搜索成功, query: '%s', 返回 %d 条结果", query, len(results))
+	log.Infof("[SearchHandler] hybrid search completed, query=%q topK=%d disableRerank=%t resultCount=%d", query, topK, disableRerank, len(results))
 	c.JSON(http.StatusOK, gin.H{"code": 200, "data": results, "message": "success"})
 }

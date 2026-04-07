@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Namespace Api
  *
  * All backend api type
@@ -133,7 +133,7 @@ declare namespace Api {
       fileList: import('naive-ui').UploadFileInfo[];
     }
 
-        interface UploadTask {
+    interface UploadTask {
       file: File | null;
       chunk: Blob | null;
       fileMd5: string;
@@ -218,5 +218,3 @@ declare namespace Api {
     }
   }
 }
-
-

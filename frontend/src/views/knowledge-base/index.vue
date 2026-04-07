@@ -1,9 +1,9 @@
-﻿<script setup lang="tsx">
+<script setup lang="tsx">
 import type { UploadFileInfo } from 'naive-ui';
 import { NButton, NCard, NDataTable, NEllipsis, NModal, NPopconfirm, NProgress, NTag, NUpload } from 'naive-ui';
-import { UploadStatus } from '@/enum';
 import { uploadAccept } from '@/constants/common';
 import { fakePaginationRequest } from '@/service/request';
+import { UploadStatus } from '@/enum';
 import SvgIcon from '@/components/custom/svg-icon.vue';
 import FilePreview from '@/components/custom/file-preview.vue';
 import UploadDialog from './modules/upload-dialog.vue';
@@ -57,7 +57,10 @@ const { columns, columnChecks, data, getData, loading } = useTable({
         <div class="flex items-center">
           {renderIcon(row.fileName)}
           <NEllipsis lineClamp={2} tooltip>
-            <span class="cursor-pointer hover:text-primary transition-colors" onClick={() => handleFilePreview(row.fileName)}>
+            <span
+              class="cursor-pointer transition-colors hover:text-primary"
+              onClick={() => handleFilePreview(row.fileName)}
+            >
               {row.fileName}
             </span>
           </NEllipsis>
@@ -86,7 +89,8 @@ const { columns, columnChecks, data, getData, loading } = useTable({
       key: 'isPublic',
       title: '公开',
       width: 100,
-      render: (row: any) => (row.public || row.isPublic ? <NTag type="success">公开</NTag> : <NTag type="warning">私有</NTag>)
+      render: (row: any) =>
+        row.public || row.isPublic ? <NTag type="success">公开</NTag> : <NTag type="warning">私有</NTag>
     },
     {
       key: 'createdAt',

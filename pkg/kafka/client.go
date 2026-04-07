@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"pai-smart-go/internal/config"
 	"pai-smart-go/internal/repository"
 	"pai-smart-go/pkg/log"
 	"pai-smart-go/pkg/tasks"
+	"strings"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -30,8 +32,10 @@ type topicSet struct {
 }
 
 var (
-	writers map[string]*kafka.Writer
-	topics  topicSet
+	writers        map[string]*kafka.Writer
+	topics         topicSet
+	producerCfg    config.KafkaConfig
+	producerDialer *kafka.Dialer
 )
 
 func normalizeKafkaConfig(cfg config.KafkaConfig) config.KafkaConfig {
@@ -75,6 +79,14 @@ func normalizeKafkaConfig(cfg config.KafkaConfig) config.KafkaConfig {
 // InitProducer initializes writers for all pipeline topics.
 func InitProducer(cfg config.KafkaConfig) {
 	cfg = normalizeKafkaConfig(cfg)
+	producerCfg = cfg
+	brokers := parseKafkaBrokers(cfg.Brokers)
+	dialer := &kafka.Dialer{
+		Timeout:   10 * time.Second,
+		DualStack: true,
+		KeepAlive: 30 * time.Second,
+	}
+	producerDialer = dialer
 	topics = topicSet{
 		parse: cfg.Topics.Parse,
 		chunk: cfg.Topics.Chunk,
@@ -88,9 +100,19 @@ func InitProducer(cfg config.KafkaConfig) {
 			continue
 		}
 		writers[t] = &kafka.Writer{
-			Addr:     kafka.TCP(cfg.Brokers),
-			Topic:    t,
-			Balancer: &kafka.LeastBytes{},
+			Addr:         kafka.TCP(brokers...),
+			Topic:        t,
+			Balancer:     &kafka.LeastBytes{},
+			RequiredAcks: kafka.RequireOne,
+			MaxAttempts:  maxInt(cfg.MaxRetries, 3),
+			BatchTimeout: 150 * time.Millisecond,
+			ReadTimeout:  20 * time.Second,
+			WriteTimeout: 20 * time.Second,
+			Transport: &kafka.Transport{
+				Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+					return dialer.DialContext(ctx, network, address)
+				},
+			},
 		}
 	}
 	log.Infof("Kafka 生产者初始化成功, topics=%v", []string{topics.parse, topics.chunk, topics.embed, topics.index, topics.dlq})
@@ -123,7 +145,81 @@ func produceToTopic(ctx context.Context, topic string, task tasks.FileProcessing
 	if err != nil {
 		return err
 	}
-	return writer.WriteMessages(ctx, kafka.Message{Value: taskBytes})
+
+	maxAttempts := maxInt(producerCfg.MaxRetries, 3)
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		writeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		err = writer.WriteMessages(writeCtx, kafka.Message{
+			Time:  time.Now(),
+			Value: taskBytes,
+		})
+		cancel()
+		if err == nil {
+			return nil
+		}
+
+		lastErr = err
+		log.Warnf("Kafka writer fallback probe, topic=%s attempt=%d/%d err=%v", topic, attempt, maxAttempts, err)
+		if leaderErr := produceByLeaderDial(ctx, topic, taskBytes); leaderErr == nil {
+			log.Infof("Kafka leader dial fallback succeeded, topic=%s attempt=%d/%d", topic, attempt, maxAttempts)
+			return nil
+		} else {
+			lastErr = leaderErr
+			log.Warnf("Kafka leader dial fallback failed, topic=%s attempt=%d/%d err=%v", topic, attempt, maxAttempts, leaderErr)
+		}
+		if attempt == maxAttempts || !isRetriableProduceError(err) {
+			break
+		}
+
+		backoff := time.Duration(maxInt(producerCfg.BaseBackoffMs, 500)) * time.Millisecond * time.Duration(1<<(attempt-1))
+		if backoff > 5*time.Second {
+			backoff = 5 * time.Second
+		}
+		log.Warnf("Kafka produce retry, topic=%s attempt=%d/%d backoff=%s err=%v", topic, attempt, maxAttempts, backoff, err)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+	}
+
+	return lastErr
+}
+
+func produceByLeaderDial(ctx context.Context, topic string, taskBytes []byte) error {
+	if producerDialer == nil {
+		return errors.New("kafka producer dialer not initialized")
+	}
+
+	brokers := parseKafkaBrokers(producerCfg.Brokers)
+	var lastErr error
+	for _, broker := range brokers {
+		writeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		conn, err := producerDialer.DialLeader(writeCtx, "tcp", broker, topic, 0)
+		cancel()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		_ = conn.SetWriteDeadline(time.Now().Add(20 * time.Second))
+		_, err = conn.WriteMessages(kafka.Message{
+			Time:  time.Now(),
+			Value: taskBytes,
+		})
+		_ = conn.Close()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("failed to dial kafka leader for topic=%s", topic)
+	}
+	return lastErr
 }
 
 // ProduceFileTask enqueues the first stage of the pipeline (parse).
@@ -152,12 +248,20 @@ func StartPipelineConsumers(cfg config.KafkaConfig, processor TaskProcessor, tra
 }
 
 func consumeStage(cfg config.KafkaConfig, tracker repository.PipelineTaskRepository, processor TaskProcessor, stage tasks.Stage, topic, groupID string) {
+	brokers := parseKafkaBrokers(cfg.Brokers)
+	dialer := &kafka.Dialer{
+		Timeout:   10 * time.Second,
+		DualStack: true,
+		KeepAlive: 30 * time.Second,
+	}
+
 	r := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:  []string{cfg.Brokers},
+		Brokers:  brokers,
 		Topic:    topic,
 		GroupID:  groupID,
 		MinBytes: 10e3,
 		MaxBytes: 10e6,
+		Dialer:   dialer,
 	})
 	defer func() {
 		if err := r.Close(); err != nil {
@@ -187,6 +291,9 @@ func consumeStage(cfg config.KafkaConfig, tracker repository.PipelineTaskReposit
 
 		// 文件级任务：chunk_id 固定为 -1。后续可扩展到 chunk 级别。
 		chunkID := -1
+		if task.TaskChunkID > 0 {
+			chunkID = task.TaskChunkID
+		}
 		previous, getErr := tracker.GetByKey(task.FileMD5, string(task.Stage), chunkID)
 		if getErr == nil && previous.Status == "SUCCESS" {
 			_ = r.CommitMessages(context.Background(), m)
@@ -239,3 +346,47 @@ func consumeStage(cfg config.KafkaConfig, tracker repository.PipelineTaskReposit
 	}
 }
 
+func parseKafkaBrokers(raw string) []string {
+	parts := strings.Split(raw, ",")
+	brokers := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			brokers = append(brokers, part)
+		}
+	}
+	if len(brokers) == 0 {
+		return []string{"127.0.0.1:9092"}
+	}
+	return brokers
+}
+
+func isRetriableProduceError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "i/o timeout") ||
+		strings.Contains(msg, "unknown topic or partition") ||
+		strings.Contains(msg, "timeout") ||
+		strings.Contains(msg, "leader not available") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "unexpected eof")
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}

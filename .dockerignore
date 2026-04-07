@@ -1,0 +1,17 @@
+.git
+.gocache
+.gomodcache
+.qoder
+.venv-reranker
+.vscode
+frontend/node_modules
+frontend/.nuxt
+frontend/dist
+homepage
+StudyStepByStep
+logs
+bin
+benchmark.exe
+server.exe
+*.log
+*.tmp

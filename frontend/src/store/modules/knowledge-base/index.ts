@@ -1,14 +1,9 @@
-﻿import { nanoid } from '~/packages/utils/src';
-import { createLocalforage } from '~/packages/utils/src/storage';
-import {
-  fetchUploadCheck,
-  fetchUploadChunk,
-  fetchUploadMerge,
-  fetchUploadStatus
-} from '@/service/api';
-import { UploadStatus } from '@/enum';
 import { chunkSize } from '@/constants/common';
+import { fetchUploadCheck, fetchUploadChunk, fetchUploadMerge, fetchUploadStatus } from '@/service/api';
 import { calculateBlobMD5, calculateMD5 } from '@/utils/common';
+import { UploadStatus } from '@/enum';
+import { nanoid } from '~/packages/utils/src';
+import { createLocalforage } from '~/packages/utils/src/storage';
 
 const TASK_PERSIST_KEY = 'knowledge-base-upload-tasks-v2';
 const GLOBAL_CHUNK_CONCURRENCY = 8;
@@ -91,9 +86,7 @@ export const useKnowledgeBaseStore = defineStore(SetupStoreId.KnowledgeBase, () 
   }
 
   function persistTasks() {
-    const toPersist = tasks.value
-      .filter(task => task.status !== UploadStatus.Completed)
-      .map(toPersistedTask);
+    const toPersist = tasks.value.filter(task => task.status !== UploadStatus.Completed).map(toPersistedTask);
 
     window.localStorage.setItem(TASK_PERSIST_KEY, JSON.stringify(toPersist));
   }

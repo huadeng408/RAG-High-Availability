@@ -1,5 +1,5 @@
-﻿import { REQUEST_ID_KEY } from '~/packages/axios/src';
 import { request } from '../request';
+import { REQUEST_ID_KEY } from '~/packages/axios/src';
 
 export function fetchUploadCheck(md5: string) {
   return request<Api.KnowledgeBase.UploadCheckResponse>({

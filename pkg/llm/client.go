@@ -153,6 +153,9 @@ func (c *deepseekClient) StreamChatMessages(ctx context.Context, messages []Mess
 
 			if len(chunk.Choices) > 0 {
 				content := chunk.Choices[0].Delta.Content
+				if content == "" {
+					continue
+				}
 				if err := writer.WriteMessage(websocket.TextMessage, []byte(content)); err != nil {
 					return fmt.Errorf("failed to write message to websocket: %w", err)
 				}

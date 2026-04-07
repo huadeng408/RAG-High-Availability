@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"pai-smart-go/internal/config"
@@ -22,7 +23,11 @@ import (
 
 var ESClient *elasticsearch.Client
 
-func InitES(esCfg config.ElasticsearchConfig) error {
+func InitES(esCfg config.ElasticsearchConfig, vectorDims int) error {
+	if vectorDims <= 0 {
+		vectorDims = 2048
+	}
+
 	cfg := elasticsearch.Config{
 		Addresses: []string{esCfg.Addresses},
 		Username:  esCfg.Username,
@@ -34,10 +39,10 @@ func InitES(esCfg config.ElasticsearchConfig) error {
 		return err
 	}
 	ESClient = client
-	return createIndexIfNotExists(esCfg.IndexName)
+	return createIndexIfNotExists(esCfg.IndexName, vectorDims)
 }
 
-func createIndexIfNotExists(indexName string) error {
+func createIndexIfNotExists(indexName string, vectorDims int) error {
 	res, err := ESClient.Indices.Exists([]string{indexName})
 	if err != nil {
 		log.Errorf("failed to check index existence: %v", err)
@@ -47,13 +52,17 @@ func createIndexIfNotExists(indexName string) error {
 
 	if !res.IsError() && res.StatusCode == http.StatusOK {
 		log.Infof("index '%s' already exists", indexName)
+		dims, dimErr := GetIndexVectorDims(context.Background(), indexName, "vector")
+		if dimErr == nil && dims > 0 && dims != vectorDims {
+			log.Warnf("index '%s' vector dims=%d but embedding dims=%d; vector search may degrade to keyword-only fallback", indexName, dims, vectorDims)
+		}
 		return nil
 	}
 	if res.StatusCode != http.StatusNotFound {
 		return fmt.Errorf("unexpected status when checking index existence: %d", res.StatusCode)
 	}
 
-	mapping := `{
+	mapping := fmt.Sprintf(`{
 		"mappings": {
 			"properties": {
 				"vector_id": { "type": "keyword" },
@@ -66,7 +75,7 @@ func createIndexIfNotExists(indexName string) error {
 				},
 				"vector": {
 					"type": "dense_vector",
-					"dims": 2048,
+					"dims": %d,
 					"index": true,
 					"similarity": "cosine"
 				},
@@ -76,7 +85,7 @@ func createIndexIfNotExists(indexName string) error {
 				"is_public": { "type": "boolean" }
 			}
 		}
-	}`
+	}`, vectorDims)
 
 	res, err = ESClient.Indices.Create(indexName, ESClient.Indices.Create.WithBody(strings.NewReader(mapping)))
 	if err != nil {
@@ -87,6 +96,57 @@ func createIndexIfNotExists(indexName string) error {
 		return errors.New("failed to create index")
 	}
 	return nil
+}
+
+func GetIndexVectorDims(ctx context.Context, indexName, fieldName string) (int, error) {
+	res, err := ESClient.Indices.GetMapping(ESClient.Indices.GetMapping.WithContext(ctx), ESClient.Indices.GetMapping.WithIndex(indexName))
+	if err != nil {
+		return 0, err
+	}
+	defer res.Body.Close()
+	if res.IsError() {
+		body, _ := io.ReadAll(res.Body)
+		return 0, fmt.Errorf("get mapping failed: status=%s body=%s", res.Status(), strings.TrimSpace(string(body)))
+	}
+
+	var mapping map[string]struct {
+		Mappings struct {
+			Properties map[string]struct {
+				Dims any `json:"dims"`
+			} `json:"properties"`
+		} `json:"mappings"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&mapping); err != nil {
+		return 0, err
+	}
+	idx, ok := mapping[indexName]
+	if !ok {
+		for _, v := range mapping {
+			idx = v
+			break
+		}
+	}
+	field, ok := idx.Mappings.Properties[fieldName]
+	if !ok {
+		return 0, nil
+	}
+	switch d := field.Dims.(type) {
+	case float64:
+		return int(d), nil
+	case int:
+		return d, nil
+	case json.Number:
+		v, _ := d.Int64()
+		return int(v), nil
+	case string:
+		v, convErr := strconv.Atoi(d)
+		if convErr != nil {
+			return 0, convErr
+		}
+		return v, nil
+	default:
+		return 0, nil
+	}
 }
 
 func IndexDocument(ctx context.Context, indexName string, doc model.EsDocument) error {

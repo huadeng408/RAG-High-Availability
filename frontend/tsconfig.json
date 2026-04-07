@@ -9,7 +9,9 @@
     "moduleResolution": "node",
     "paths": {
       "@/*": ["./src/*"],
-      "~/*": ["./*"]
+      "~/*": ["./*"],
+      "vue-markdown-shiki": ["./src/typings/vue-markdown-shiki.d.ts"],
+      "vue-markdown-shiki/style": ["./src/typings/vue-markdown-shiki.d.ts"]
     },
     "resolveJsonModule": true,
     "types": ["vite/client", "node", "unplugin-icons/types/vue", "naive-ui/volar"],

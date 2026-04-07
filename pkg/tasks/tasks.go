@@ -19,6 +19,9 @@ type FileProcessingTask struct {
 	OrgTag       string `json:"org_tag"`
 	IsPublic     bool   `json:"is_public"`
 	Stage        Stage  `json:"stage"`
+	TaskChunkID  int    `json:"task_chunk_id,omitempty"`
+	ChunkStart   int    `json:"chunk_start,omitempty"`
+	TotalChunks  int    `json:"total_chunks,omitempty"`
 	ParsedObject string `json:"parsed_object,omitempty"`
 	LastError    string `json:"last_error,omitempty"`
 }

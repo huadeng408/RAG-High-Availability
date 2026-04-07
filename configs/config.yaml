@@ -73,3 +73,28 @@ llm:
     temperature: 0.3
     max_tokens: 2000
     top_p: 0.9
+
+agent:
+  enabled: true
+  base_url: "http://127.0.0.1:11434/v1"
+  api_key: ""
+  model: "qwen3:4b"
+  timeout_ms: 1500
+  max_sub_queries: 2
+  history_turns: 6
+  temperature: 0.1
+  max_tokens: 256
+
+retrieval:
+  bm25_topn: 100
+  vector_topn: 100
+  rrf_k: 60
+  rerank_topn: 100
+  final_topk: 5
+  rerank_timeout_ms: 120
+
+reranker:
+  enabled: true
+  base_url: "http://127.0.0.1:8008"
+  api_key: ""
+  model: "jinaai/jina-reranker-v2-base-multilingual"

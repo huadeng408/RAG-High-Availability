@@ -1,6 +1,6 @@
 # --- Build Stage ---
 # 使用官方 Go 镜像作为构建环境
-FROM golang:1.22-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 # 设置工作目录
 WORKDIR /app

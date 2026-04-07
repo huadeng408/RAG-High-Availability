@@ -71,7 +71,7 @@ CREATE TABLE document_vectors (
     file_md5 VARCHAR(32) NOT NULL,
     chunk_id INT NOT NULL,
     text_content TEXT,
-    model_version VARCHAR(32),
+    model_version VARCHAR(128),
     user_id VARCHAR(64) NOT NULL,
     org_tag VARCHAR(50),
     is_public TINYINT(1) NOT NULL DEFAULT 0

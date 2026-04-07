@@ -4,7 +4,7 @@ services:
   mysql:
     container_name: mysql
     image: mysql:8
-    restart: always
+    restart: "no"
     ports:
       - "3307:3306"
     environment:
@@ -23,7 +23,7 @@ services:
   redis:
     image: redis:7.2-alpine
     container_name: redis
-    restart: always
+    restart: "no"
     ports:
       - "6380:6379"
     volumes:
@@ -39,7 +39,7 @@ services:
   minio:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     container_name: minio
-    restart: always
+    restart: "no"
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -68,7 +68,7 @@ services:
     container_name: tika-server
     ports:
       - "9998:9998"
-    restart: unless-stopped
+    restart: "no"
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.2.1
@@ -76,11 +76,12 @@ services:
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
-    restart: unless-stopped
+    restart: "no"
 
   kafka:
     image: confluentinc/cp-kafka:7.2.1
     container_name: kafka
+    restart: "no"
     depends_on:
       - zookeeper
     ports:
@@ -88,8 +89,10 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
@@ -113,7 +116,7 @@ services:
   es:
     image: elasticsearch:8.10.4
     container_name: es
-    restart: always
+    restart: "no"
     ports:
       - "9200:9200"
     environment:
@@ -124,13 +127,13 @@ services:
       - xpack.security.enrollment.enabled=false
       - xpack.security.http.ssl.enabled=false
       - cluster.name=pai-smart-es-cluster
-      - ES_JAVA_OPTS=-Xms2g -Xmx2g
+      - ES_JAVA_OPTS=-Xms768m -Xmx768m
     volumes:
       - es-data:/usr/share/elasticsearch/data
     deploy:
       resources:
         limits:
-          memory: 2g
+          memory: 1g
     command: >
       bash -c "
       if ! elasticsearch-plugin list | grep -q 'analysis-ik'; then
@@ -147,12 +150,42 @@ services:
       timeout: 10s
       retries: 3
 
+  reranker:
+    build:
+      context: ..
+      dockerfile: deployments/reranker/Dockerfile
+    container_name: reranker
+    restart: "no"
+    ports:
+      - "8008:8008"
+    environment:
+      RERANKER_MODEL: "jinaai/jina-reranker-v2-base-multilingual"
+      RERANKER_THREADS: "4"
+    volumes:
+      - reranker-cache:/root/.cache
+
+  embedding:
+    build:
+      context: ..
+      dockerfile: deployments/embedding/Dockerfile
+    container_name: embedding
+    restart: "no"
+    ports:
+      - "8009:8009"
+    environment:
+      EMBEDDING_MODEL: "jinaai/jina-embeddings-v2-base-zh"
+      EMBEDDING_THREADS: "4"
+    volumes:
+      - embedding-cache:/root/.cache
+
 volumes:
   mysql-data:
   redis-data:
   minio-data:
   kafka-data:
   es-data:
+  reranker-cache:
+  embedding-cache:
 
 networks:
   default:
