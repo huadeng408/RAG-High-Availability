@@ -1,6 +1,7 @@
 /.qoder
 /.idea
 /.gocache
+/.gomodcache
 /.venv-reranker
 /logs
 /benchmarks
