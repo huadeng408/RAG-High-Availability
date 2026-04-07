@@ -1,5 +1,12 @@
 /.qoder
 /.idea
-frontend/packages/scripts/bin.ts
-frontend/packages/scripts/bin.ts
+/.gocache
+/.venv-reranker
 /logs
+/benchmarks
+/cmd/benchmark
+/frontend/node_modules
+/scripts/__pycache__
+/scripts/build_local_search_benchmark.py
+/scripts/prepare_search_eval.py
+frontend/packages/scripts/bin.ts
