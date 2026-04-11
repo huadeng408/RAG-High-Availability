@@ -46,6 +46,7 @@ type DocumentService interface {
 	GetFilePreviewContent(fileName string, user *model.User) (*PreviewInfoDTO, error)
 }
 
+// documentService implements document operations.
 type documentService struct {
 	uploadRepo repository.UploadRepository
 	userRepo   repository.UserRepository
@@ -186,6 +187,7 @@ func (s *documentService) GetFilePreviewContent(fileName string, user *model.Use
 	}, nil
 }
 
+// mapFileUploadsToDTOs handles map file uploads to dt os.
 func (s *documentService) mapFileUploadsToDTOs(files []model.FileUpload) ([]FileUploadDTO, error) {
 	if len(files) == 0 {
 		return []FileUploadDTO{}, nil

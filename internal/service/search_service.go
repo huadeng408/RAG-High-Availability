@@ -1,3 +1,4 @@
+// Package service contains business logic.
 package service
 
 import (
@@ -35,11 +36,13 @@ var (
 	normalizeSpacePattern = regexp.MustCompile(`\s+`)
 )
 
+// SearchService defines search operations.
 type SearchService interface {
 	HybridSearch(ctx context.Context, query string, topK int, user *model.User) ([]model.SearchResponseDTO, error)
 	Search(ctx context.Context, options SearchOptions, user *model.User) ([]model.SearchResponseDTO, error)
 }
 
+// SearchOptions represents a search options.
 type SearchOptions struct {
 	Query         string
 	TopK          int
@@ -47,6 +50,7 @@ type SearchOptions struct {
 	Mode          model.RetrievalMode
 }
 
+// searchService implements search operations.
 type searchService struct {
 	embeddingClient embedding.Client
 	rerankerClient  reranker.Client
@@ -58,12 +62,14 @@ type searchService struct {
 	observer        *retrievalObserver
 }
 
+// retrievalHit represents a retrieval hit.
 type retrievalHit struct {
 	ID     string
 	Score  float64
 	Source model.EsDocument
 }
 
+// esSearchResponse describes the ES search response payload.
 type esSearchResponse struct {
 	Hits struct {
 		Hits []struct {
@@ -74,6 +80,7 @@ type esSearchResponse struct {
 	} `json:"hits"`
 }
 
+// retrievalObservation represents a retrieval observation.
 type retrievalObservation struct {
 	RecallAt100      float64
 	NDCGAt5          float64
@@ -87,11 +94,13 @@ type retrievalObservation struct {
 	RerankTimeout    bool
 }
 
+// retrievalSnapshot captures the retrieval snapshot.
 type retrievalSnapshot struct {
 	LatencyP95Ms      float64
 	RerankTimeoutRate float64
 }
 
+// retrievalObserver represents a retrieval observer.
 type retrievalObserver struct {
 	mu             sync.Mutex
 	maxSamples     int
@@ -100,6 +109,7 @@ type retrievalObserver struct {
 	timeoutCount   int64
 }
 
+// NewSearchService creates a search service.
 func NewSearchService(
 	embeddingClient embedding.Client,
 	rerankerClient reranker.Client,
@@ -124,6 +134,7 @@ func NewSearchService(
 	}
 }
 
+// HybridSearch handles hybrid search.
 func (s *searchService) HybridSearch(ctx context.Context, query string, topK int, user *model.User) ([]model.SearchResponseDTO, error) {
 	return s.Search(ctx, SearchOptions{
 		Query: query,
@@ -132,6 +143,7 @@ func (s *searchService) HybridSearch(ctx context.Context, query string, topK int
 	}, user)
 }
 
+// Search handles search.
 func (s *searchService) Search(ctx context.Context, options SearchOptions, user *model.User) ([]model.SearchResponseDTO, error) {
 	start := time.Now()
 	query := strings.TrimSpace(options.Query)
@@ -275,6 +287,7 @@ func (s *searchService) Search(ctx context.Context, options SearchOptions, user 
 	return results, nil
 }
 
+// bm25Search handles bm 25 search.
 func (s *searchService) bm25Search(ctx context.Context, query string, topN int, userID uint, orgTags []string) ([]retrievalHit, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -321,6 +334,7 @@ func (s *searchService) bm25Search(ctx context.Context, query string, topN int, 
 	return s.searchOnce(ctx, body)
 }
 
+// vectorSearch handles vector search.
 func (s *searchService) vectorSearch(ctx context.Context, query string, topN int, userID uint, orgTags []string) ([]retrievalHit, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -348,6 +362,7 @@ func (s *searchService) vectorSearch(ctx context.Context, query string, topN int
 	return s.searchOnce(ctx, body)
 }
 
+// phraseSearch handles phrase search.
 func (s *searchService) phraseSearch(ctx context.Context, phrase string, topN int, userID uint, orgTags []string) ([]retrievalHit, error) {
 	phrase = strings.TrimSpace(phrase)
 	if phrase == "" {
@@ -380,6 +395,7 @@ func (s *searchService) phraseSearch(ctx context.Context, phrase string, topN in
 	return s.searchOnce(ctx, body)
 }
 
+// searchOnce searches once.
 func (s *searchService) searchOnce(ctx context.Context, body map[string]any) ([]retrievalHit, error) {
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(body); err != nil {
@@ -417,6 +433,7 @@ func (s *searchService) searchOnce(ctx context.Context, body map[string]any) ([]
 	return hits, nil
 }
 
+// rerankHits handles rerank hits.
 func (s *searchService) rerankHits(ctx context.Context, query string, fusedHits []retrievalHit, returnTopK int) ([]retrievalHit, bool, bool) {
 	if len(fusedHits) == 0 || returnTopK <= 0 {
 		return []retrievalHit{}, false, false
@@ -477,6 +494,7 @@ func (s *searchService) rerankHits(ctx context.Context, query string, fusedHits 
 	return reranked, len(reranked) > 0, false
 }
 
+// buildResponseDTOs builds response dt os.
 func (s *searchService) buildResponseDTOs(hits []retrievalHit) ([]model.SearchResponseDTO, error) {
 	md5Set := make(map[string]struct{}, len(hits))
 	md5s := make([]string, 0, len(hits))
@@ -522,6 +540,7 @@ func (s *searchService) buildResponseDTOs(hits []retrievalHit) ([]model.SearchRe
 	return results, nil
 }
 
+// logRetrievalMetrics handles log retrieval metrics.
 func (s *searchService) logRetrievalMetrics(query, normalizedQuery, rawPhrase string, obs retrievalObservation) {
 	snapshot := s.observer.Record(obs)
 	log.Infow("[SearchService] retrieval metrics",
@@ -543,6 +562,7 @@ func (s *searchService) logRetrievalMetrics(query, normalizedQuery, rawPhrase st
 	)
 }
 
+// normalizeRetrievalConfig normalizes retrieval config.
 func normalizeRetrievalConfig(cfg config.RetrievalConfig) config.RetrievalConfig {
 	if cfg.BM25TopN <= 0 {
 		cfg.BM25TopN = 100
@@ -565,6 +585,7 @@ func normalizeRetrievalConfig(cfg config.RetrievalConfig) config.RetrievalConfig
 	return cfg
 }
 
+// resolveRequestedTopK resolves requested top k.
 func resolveRequestedTopK(topK int, cfg config.RetrievalConfig) int {
 	if topK <= 0 {
 		topK = cfg.FinalTopK
@@ -579,6 +600,7 @@ func resolveRequestedTopK(topK int, cfg config.RetrievalConfig) int {
 	return topK
 }
 
+// resolveReturnTopK resolves return top k.
 func resolveReturnTopK(requestedTopK int, cfg config.RetrievalConfig, rerankerEnabled bool) int {
 	if requestedTopK <= 0 {
 		requestedTopK = cfg.FinalTopK
@@ -589,6 +611,7 @@ func resolveReturnTopK(requestedTopK int, cfg config.RetrievalConfig, rerankerEn
 	return requestedTopK
 }
 
+// buildPermissionFilter builds permission filter.
 func buildPermissionFilter(userID uint, orgTags []string) map[string]any {
 	should := []any{
 		map[string]any{"term": map[string]any{"user_id": userID}},
@@ -605,10 +628,12 @@ func buildPermissionFilter(userID uint, orgTags []string) map[string]any {
 	}
 }
 
+// buildSourceFields builds source fields.
 func buildSourceFields() []string {
 	return []string{"file_md5", "chunk_id", "text_content", "user_id", "org_tag", "is_public"}
 }
 
+// fuseHitsByMode fuses hits by mode.
 func fuseHitsByMode(mode model.RetrievalMode, rrfK int, bm25Hits, vectorHits, phraseHits []retrievalHit) []retrievalHit {
 	switch mode {
 	case model.RetrievalModeBM25:
@@ -620,6 +645,7 @@ func fuseHitsByMode(mode model.RetrievalMode, rrfK int, bm25Hits, vectorHits, ph
 	}
 }
 
+// rrfFuse handles rrf fuse.
 func rrfFuse(rrfK int, hitLists ...[]retrievalHit) []retrievalHit {
 	type fusedEntry struct {
 		hit   retrievalHit
@@ -655,6 +681,7 @@ func rrfFuse(rrfK int, hitLists ...[]retrievalHit) []retrievalHit {
 	return out
 }
 
+// truncateHits truncates hits.
 func truncateHits(hits []retrievalHit, topN int) []retrievalHit {
 	if topN <= 0 || len(hits) <= topN {
 		out := make([]retrievalHit, len(hits))
@@ -666,6 +693,7 @@ func truncateHits(hits []retrievalHit, topN int) []retrievalHit {
 	return out
 }
 
+// candidateKey handles candidate key.
 func candidateKey(doc model.EsDocument, fallbackID string) string {
 	if strings.TrimSpace(doc.FileMD5) != "" {
 		return fmt.Sprintf("%s:%d", doc.FileMD5, doc.ChunkID)
@@ -673,6 +701,7 @@ func candidateKey(doc model.EsDocument, fallbackID string) string {
 	return fallbackID
 }
 
+// normalizeQuery normalizes query.
 func normalizeQuery(q string) (string, string) {
 	raw := strings.TrimSpace(q)
 	if raw == "" {
@@ -702,6 +731,7 @@ func normalizeQuery(q string) (string, string) {
 	return normalized, strings.TrimSpace(rawPhrase)
 }
 
+// extractQuotedPhrase extracts quoted phrase.
 func extractQuotedPhrase(q string) string {
 	for _, pattern := range quotedPhrasePatterns {
 		matches := pattern.FindStringSubmatch(q)
@@ -715,6 +745,7 @@ func extractQuotedPhrase(q string) string {
 	return ""
 }
 
+// shouldTriggerPhraseFallback reports whether trigger phrase fallback.
 func shouldTriggerPhraseFallback(rawPhrase string, bm25Count, vectorCount, threshold int) bool {
 	if strings.TrimSpace(rawPhrase) == "" {
 		return false
@@ -722,10 +753,12 @@ func shouldTriggerPhraseFallback(rawPhrase string, bm25Count, vectorCount, thres
 	return bm25Count < threshold || vectorCount < threshold
 }
 
+// phraseFallbackThreshold handles phrase fallback threshold.
 func phraseFallbackThreshold(requestedTopK int) int {
 	return minInt(maxInt(requestedTopK, 5), 20)
 }
 
+// isVectorDimensionMismatchError reports whether vector dimension mismatch error.
 func isVectorDimensionMismatchError(err error) bool {
 	if err == nil {
 		return false
@@ -738,6 +771,7 @@ func isVectorDimensionMismatchError(err error) bool {
 		strings.Contains(msg, "query_vector")
 }
 
+// isTimeoutError reports whether timeout error.
 func isTimeoutError(err error) bool {
 	if err == nil {
 		return false
@@ -749,6 +783,7 @@ func isTimeoutError(err error) bool {
 	return strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded")
 }
 
+// newRetrievalObserver creates a retrieval observer.
 func newRetrievalObserver(maxSamples int) *retrievalObserver {
 	if maxSamples <= 0 {
 		maxSamples = 512
@@ -759,6 +794,7 @@ func newRetrievalObserver(maxSamples int) *retrievalObserver {
 	}
 }
 
+// Record handles record.
 func (o *retrievalObserver) Record(obs retrievalObservation) retrievalSnapshot {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -786,6 +822,7 @@ func (o *retrievalObserver) Record(obs retrievalObservation) retrievalSnapshot {
 	}
 }
 
+// percentile returns the requested percentile from a sorted slice.
 func percentile(sorted []float64, p float64) float64 {
 	if len(sorted) == 0 {
 		return 0
@@ -800,6 +837,7 @@ func percentile(sorted []float64, p float64) float64 {
 	return sorted[idx]
 }
 
+// minInt returns the smaller of two integers.
 func minInt(a, b int) int {
 	if a < b {
 		return a
@@ -807,6 +845,7 @@ func minInt(a, b int) int {
 	return b
 }
 
+// maxInt returns the larger of two integers.
 func maxInt(a, b int) int {
 	if a > b {
 		return a

@@ -77,6 +77,48 @@ CREATE TABLE document_vectors (
     is_public TINYINT(1) NOT NULL DEFAULT 0
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE working_memory_snapshots (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    conversation_id VARCHAR(64) NOT NULL,
+    summary TEXT NOT NULL,
+    facts_json TEXT,
+    entities_json TEXT,
+    message_count INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_working_memory_user_conv (user_id, conversation_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE user_profile_slots (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    slot_key VARCHAR(64) NOT NULL,
+    slot_value VARCHAR(255) NOT NULL,
+    confidence DOUBLE NOT NULL DEFAULT 0,
+    source VARCHAR(128) DEFAULT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_user_profile_slot (user_id, slot_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE long_term_memories (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    memory_id VARCHAR(96) NOT NULL,
+    user_id BIGINT NOT NULL,
+    conversation_id VARCHAR(64) NOT NULL,
+    memory_type VARCHAR(32) NOT NULL,
+    content TEXT NOT NULL,
+    summary TEXT,
+    entities_json TEXT,
+    importance DOUBLE NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_long_term_memory_id (memory_id),
+    INDEX idx_long_term_memory_user (user_id),
+    INDEX idx_long_term_memory_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 INSERT INTO users (username, password, role)
 VALUES ('admin', '$2a$10$CuNbcCAjuZPTu/VnBT/kgeU4Pu.bcEo23GJxvugZt/3yTQ8iIF4hC', 'ADMIN');
 

@@ -1,3 +1,4 @@
+// Package database contains shared database clients.
 package database
 
 import "fmt"

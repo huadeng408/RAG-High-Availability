@@ -1,3 +1,4 @@
+// Package log contains logging helpers.
 package log
 
 import (
@@ -7,6 +8,7 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// sugar stores the shared sugared logger.
 var sugar *zap.SugaredLogger
 
 // Init 初始化 zap logger
@@ -87,10 +89,12 @@ func Fatal(msg string, err error) {
 	sugar.Fatalw(msg, "error", err)
 }
 
+// Fatalf handles fatalf.
 func Fatalf(template string, args ...interface{}) {
 	sugar.Fatalf(template, args...)
 }
 
+// Errorf handles errorf.
 func Errorf(template string, args ...interface{}) {
 	sugar.Errorf(template, args...)
 }

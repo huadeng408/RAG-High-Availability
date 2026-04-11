@@ -12,8 +12,8 @@ import (
 	"pai-smart-go/internal/config"
 	"pai-smart-go/internal/model"
 	"pai-smart-go/internal/repository"
-	"pai-smart-go/pkg/llm"
 	"pai-smart-go/pkg/log"
+	orchestratorclient "pai-smart-go/pkg/orchestrator"
 
 	"github.com/gorilla/websocket"
 )
@@ -23,88 +23,109 @@ type ChatService interface {
 	StreamResponse(ctx context.Context, query string, user *model.User, ws *websocket.Conn, shouldStop func() bool) error
 }
 
+// chatService coordinates retrieval, generation, and conversation persistence.
 type chatService struct {
 	searchService    SearchService
-	agentService     AgentService
-	llmClient        llm.Client
+	memoryService    MemoryService
 	conversationRepo repository.ConversationRepository
+	orchestrator     orchestratorclient.Client
 }
 
 // NewChatService creates a new chat service.
-func NewChatService(searchService SearchService, agentService AgentService, llmClient llm.Client, conversationRepo repository.ConversationRepository) ChatService {
+func NewChatService(
+	searchService SearchService,
+	memoryService MemoryService,
+	conversationRepo repository.ConversationRepository,
+	orchestrator orchestratorclient.Client,
+) ChatService {
 	return &chatService{
 		searchService:    searchService,
-		agentService:     agentService,
-		llmClient:        llmClient,
+		memoryService:    memoryService,
 		conversationRepo: conversationRepo,
+		orchestrator:     orchestrator,
 	}
 }
 
-// StreamResponse orchestrates retrieval and streams LLM output.
+// StreamResponse proxies chat traffic to the external LangGraph orchestrator only.
 func (s *chatService) StreamResponse(ctx context.Context, query string, user *model.User, ws *websocket.Conn, shouldStop func() bool) error {
-	history, historyErr := s.loadHistory(ctx, user.ID)
-	if historyErr != nil {
-		log.Errorf("Failed to load conversation history: %v", historyErr)
-		history = []model.ChatMessage{}
+	if s.orchestrator == nil || !s.orchestrator.Enabled() {
+		return fmt.Errorf("langgraph orchestrator is disabled")
 	}
-
-	plan := model.DefaultAgentPlan(query)
-	if len(history) > 0 {
-		plan.NeedHistory = true
-	}
-	if s.agentService != nil && s.agentService.Enabled() {
-		planned, planErr := s.agentService.PlanQuery(ctx, query, history)
-		if planErr != nil {
-			log.Warnf("Agent planner degraded for query=%q: %v", query, planErr)
-		} else {
-			plan = planned
-		}
-		logAgentPlan(query, plan)
-	}
-
-	retrievalResults, retrievalErr := s.retrieveWithPlan(ctx, query, plan, user)
-	if retrievalErr != nil {
-		log.Warnf("Failed to retrieve context, fallback to chat without retrieval: %v", retrievalErr)
-		retrievalResults = []model.SearchResponseDTO{}
-	}
-
-	contextText := s.buildContextText(retrievalResults)
-	systemMsg := s.buildSystemMessage(contextText)
-	answerHistory := s.limitConversationHistory(history, plan.NeedHistory)
-	messages := s.composeMessages(systemMsg, answerHistory, query)
-
-	answerBuilder := &strings.Builder{}
-	interceptor := &wsWriterInterceptor{conn: ws, writer: answerBuilder, shouldStop: shouldStop}
-
-	gen := s.buildGenerationParams()
-	llmMsgs := make([]llm.Message, 0, len(messages))
-	for _, m := range messages {
-		llmMsgs = append(llmMsgs, llm.Message{Role: m.Role, Content: m.Content})
-	}
-
-	if err := s.llmClient.StreamChatMessages(ctx, llmMsgs, gen, interceptor); err != nil {
+	if err := s.orchestrator.StreamResponse(ctx, query, user, ws, shouldStop); err != nil {
 		return err
 	}
-
 	sendCompletion(ws)
-	fullAnswer := answerBuilder.String()
-	if len(fullAnswer) > 0 {
-		if err := s.addMessageToConversation(context.Background(), user.ID, query, fullAnswer); err != nil {
-			log.Errorf("Failed to save conversation history: %v", err)
-		}
-	}
 	return nil
 }
 
-func (s *chatService) retrieveWithPlan(ctx context.Context, query string, plan model.AgentPlan, user *model.User) ([]model.SearchResponseDTO, error) {
-	if plan.SkipRetrieval {
-		return []model.SearchResponseDTO{}, nil
+// retrieveContextWithPlan fetches knowledge and memory context in parallel and merges the results.
+func (s *chatService) retrieveContextWithPlan(ctx context.Context, query string, plan model.AgentPlan, user *model.User, history []model.ChatMessage) ([]ContextSnippet, error) {
+	var (
+		knowledgeItems []ContextSnippet
+		memoryItems    []ContextSnippet
+		knowledgeErr   error
+		memoryErr      error
+	)
+
+	done := make(chan struct{}, 2)
+	go func() {
+		defer func() { done <- struct{}{} }()
+		knowledgeItems, knowledgeErr = s.retrieveKnowledgeWithPlan(ctx, query, plan, user)
+	}()
+	go func() {
+		defer func() { done <- struct{}{} }()
+		if s.memoryService == nil {
+			memoryItems = []ContextSnippet{}
+			return
+		}
+		memoryItems, memoryErr = s.memoryService.SearchLongTermMemories(ctx, user, query, plan, history)
+	}()
+	<-done
+	<-done
+
+	if knowledgeErr != nil && len(knowledgeItems) == 0 && memoryErr != nil && len(memoryItems) == 0 {
+		return nil, fmt.Errorf("knowledge and memory retrieval both failed: knowledge=%v memory=%v", knowledgeErr, memoryErr)
 	}
 
-	topK := config.Conf.Retrieval.FinalTopK
-	if topK <= 0 {
-		topK = 5
+	if knowledgeErr != nil {
+		log.Warnf("knowledge retrieval degraded for query=%q: %v", query, knowledgeErr)
 	}
+	if memoryErr != nil {
+		log.Warnf("memory retrieval degraded for query=%q: %v", query, memoryErr)
+	}
+
+	contextItems := append(knowledgeItems, memoryItems...)
+	if len(contextItems) == 0 {
+		return []ContextSnippet{}, nil
+	}
+
+	if s.memoryService != nil {
+		fused, err := s.memoryService.FuseContext(ctx, query, contextItems, s.resolveContextTopK())
+		if err == nil {
+			return fused, nil
+		}
+		log.Warnf("context fusion degraded for query=%q: %v", query, err)
+	}
+
+	sort.SliceStable(contextItems, func(i, j int) bool {
+		if contextItems[i].Score == contextItems[j].Score {
+			return contextItems[i].Timestamp.After(contextItems[j].Timestamp)
+		}
+		return contextItems[i].Score > contextItems[j].Score
+	})
+	if len(contextItems) > s.resolveContextTopK() {
+		contextItems = contextItems[:s.resolveContextTopK()]
+	}
+	return contextItems, nil
+}
+
+// retrieveKnowledgeWithPlan executes knowledge retrieval according to the current agent plan.
+func (s *chatService) retrieveKnowledgeWithPlan(ctx context.Context, query string, plan model.AgentPlan, user *model.User) ([]ContextSnippet, error) {
+	if plan.SkipRetrieval {
+		return []ContextSnippet{}, nil
+	}
+
+	topK := s.resolveKnowledgeTopK()
 
 	queries := []string{strings.TrimSpace(plan.RewrittenQuery)}
 	if queries[0] == "" {
@@ -117,6 +138,7 @@ func (s *chatService) retrieveWithPlan(ctx context.Context, query string, plan m
 		disableRerank = !*plan.EnableRerank
 	}
 
+	sharedFusion := s.memoryService != nil
 	collected := make([][]model.SearchResponseDTO, 0, len(queries))
 	for idx, item := range queries {
 		if strings.TrimSpace(item) == "" {
@@ -126,7 +148,7 @@ func (s *chatService) retrieveWithPlan(ctx context.Context, query string, plan m
 			Query:         item,
 			TopK:          topK,
 			Mode:          plan.RetrievalMode,
-			DisableRerank: disableRerank || idx > 0,
+			DisableRerank: disableRerank || idx > 0 || sharedFusion,
 		}
 		results, err := s.searchService.Search(ctx, opts, user)
 		if err != nil {
@@ -139,30 +161,33 @@ func (s *chatService) retrieveWithPlan(ctx context.Context, query string, plan m
 		collected = append(collected, results)
 	}
 
-	return mergeSearchResults(collected, topK), nil
+	merged := mergeSearchResults(collected, topK)
+	return s.convertSearchResultsToContext(merged), nil
 }
 
-func (s *chatService) buildContextText(searchResults []model.SearchResponseDTO) string {
-	if len(searchResults) == 0 {
+// buildContextText formats retrieved snippets into the reference section used by the model prompt.
+func (s *chatService) buildContextText(items []ContextSnippet) string {
+	if len(items) == 0 {
 		return ""
 	}
 	const maxSnippetLen = 800
 	var contextBuilder strings.Builder
-	for i, r := range searchResults {
-		snippet := r.TextContent
+	for i, item := range items {
+		snippet := item.Text
 		if len(snippet) > maxSnippetLen {
 			snippet = snippet[:maxSnippetLen] + "..."
 		}
-		fileLabel := r.FileName
-		if fileLabel == "" {
-			fileLabel = "unknown"
+		label := item.Label
+		if label == "" {
+			label = item.SourceType
 		}
-		contextBuilder.WriteString(fmt.Sprintf("[%d] (%s) %s\n", i+1, fileLabel, snippet))
+		contextBuilder.WriteString(fmt.Sprintf("[%d] (%s) %s\n", i+1, label, snippet))
 	}
 	return contextBuilder.String()
 }
 
-func (s *chatService) buildSystemMessage(contextText string) string {
+// buildSystemMessage assembles the final system prompt with rules, memory, and retrieval context.
+func (s *chatService) buildSystemMessage(memoryPrelude, contextText string) string {
 	rules := config.Conf.AI.Prompt.Rules
 	if rules == "" {
 		rules = config.Conf.LLM.Prompt.Rules
@@ -187,6 +212,10 @@ func (s *chatService) buildSystemMessage(contextText string) string {
 		sys.WriteString(rules)
 		sys.WriteString("\n\n")
 	}
+	if strings.TrimSpace(memoryPrelude) != "" {
+		sys.WriteString(memoryPrelude)
+		sys.WriteString("\n\n")
+	}
 	sys.WriteString(refStart)
 	sys.WriteString("\n")
 	if contextText != "" {
@@ -206,39 +235,28 @@ func (s *chatService) buildSystemMessage(contextText string) string {
 	return sys.String()
 }
 
-func (s *chatService) loadHistory(ctx context.Context, userID uint) ([]model.ChatMessage, error) {
+// loadConversationContext loads the current conversation id and persisted history for the user.
+func (s *chatService) loadConversationContext(ctx context.Context, userID uint) (string, []model.ChatMessage, error) {
 	convID, err := s.conversationRepo.GetOrCreateConversationID(ctx, userID)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
-	return s.conversationRepo.GetConversationHistory(ctx, convID)
-}
-
-func (s *chatService) composeMessages(systemMsg string, history []model.ChatMessage, userInput string) []model.ChatMessage {
-	msgs := make([]model.ChatMessage, 0, len(history)+2)
-	msgs = append(msgs, model.ChatMessage{Role: "system", Content: systemMsg})
-	msgs = append(msgs, history...)
-	msgs = append(msgs, model.ChatMessage{Role: "user", Content: userInput})
-	return msgs
-}
-
-func (s *chatService) addMessageToConversation(ctx context.Context, userID uint, question, answer string) error {
-	conversationID, err := s.conversationRepo.GetOrCreateConversationID(ctx, userID)
+	history, err := s.conversationRepo.GetConversationHistory(ctx, convID)
 	if err != nil {
-		return fmt.Errorf("failed to get or create conversation ID: %w", err)
+		return convID, nil, err
 	}
-
-	history, err := s.conversationRepo.GetConversationHistory(ctx, conversationID)
-	if err != nil {
-		return fmt.Errorf("failed to get conversation history: %w", err)
-	}
-
-	history = append(history, model.ChatMessage{Role: "user", Content: question, Timestamp: time.Now()})
-	history = append(history, model.ChatMessage{Role: "assistant", Content: answer, Timestamp: time.Now()})
-
-	return s.conversationRepo.UpdateConversationHistory(ctx, conversationID, history)
+	return convID, history, nil
 }
 
+// buildSensoryHistory chooses the short-term history window passed into the model.
+func (s *chatService) buildSensoryHistory(history []model.ChatMessage, plan model.AgentPlan) []model.ChatMessage {
+	if s.memoryService != nil {
+		return s.memoryService.BuildSensoryMemory(history, plan.NeedHistory)
+	}
+	return s.limitConversationHistory(history, plan.NeedHistory)
+}
+
+// limitConversationHistory keeps only the tail of the conversation when history is required.
 func (s *chatService) limitConversationHistory(history []model.ChatMessage, needHistory bool) []model.ChatMessage {
 	if !needHistory || len(history) == 0 {
 		return []model.ChatMessage{}
@@ -250,6 +268,53 @@ func (s *chatService) limitConversationHistory(history []model.ChatMessage, need
 	return history[len(history)-maxHistoryMessages:]
 }
 
+// convertSearchResultsToContext maps search hits into generic context snippets.
+func (s *chatService) convertSearchResultsToContext(results []model.SearchResponseDTO) []ContextSnippet {
+	items := make([]ContextSnippet, 0, len(results))
+	for _, result := range results {
+		label := result.FileName
+		if strings.TrimSpace(label) == "" {
+			label = "knowledge"
+		}
+		items = append(items, ContextSnippet{
+			ID:         fmt.Sprintf("%s:%d", result.FileMD5, result.ChunkID),
+			SourceType: "knowledge",
+			Label:      label,
+			Text:       result.TextContent,
+			Score:      result.Score,
+		})
+	}
+	return items
+}
+
+// resolveKnowledgeTopK computes how many knowledge candidates to fetch before fusion.
+func (s *chatService) resolveKnowledgeTopK() int {
+	topK := config.Conf.Retrieval.FinalTopK
+	if topK <= 0 {
+		topK = 5
+	}
+	if s.memoryService != nil && config.Conf.Memory.ContextTopK > topK {
+		topK = config.Conf.Memory.ContextTopK
+	}
+	if topK < 8 {
+		topK = 8
+	}
+	return topK
+}
+
+// resolveContextTopK computes how many fused context snippets to keep.
+func (s *chatService) resolveContextTopK() int {
+	topK := config.Conf.Retrieval.FinalTopK
+	if topK <= 0 {
+		topK = 5
+	}
+	if config.Conf.Memory.ContextTopK > 0 {
+		topK = maxInt(topK, config.Conf.Memory.ContextTopK)
+	}
+	return topK
+}
+
+// mergeSearchResults deduplicates chunk hits across sub-queries and keeps the strongest score.
 func mergeSearchResults(groups [][]model.SearchResponseDTO, topK int) []model.SearchResponseDTO {
 	if len(groups) == 0 {
 		return []model.SearchResponseDTO{}
@@ -283,28 +348,7 @@ func mergeSearchResults(groups [][]model.SearchResponseDTO, topK int) []model.Se
 	return results
 }
 
-// wsWriterInterceptor wraps websocket output and captures the full answer.
-type wsWriterInterceptor struct {
-	conn       *websocket.Conn
-	writer     *strings.Builder
-	shouldStop func() bool
-}
-
-// WriteMessage implements llm.MessageWriter.
-func (w *wsWriterInterceptor) WriteMessage(messageType int, data []byte) error {
-	if w.shouldStop != nil && w.shouldStop() {
-		return nil
-	}
-	if len(data) == 0 {
-		return nil
-	}
-
-	w.writer.Write(data)
-	payload := map[string]string{"chunk": string(data)}
-	b, _ := json.Marshal(payload)
-	return w.conn.WriteMessage(messageType, b)
-}
-
+// sendCompletion notifies the websocket client that the current response has finished.
 func sendCompletion(ws *websocket.Conn) {
 	notif := map[string]any{
 		"type":      "completion",
@@ -315,24 +359,4 @@ func sendCompletion(ws *websocket.Conn) {
 	}
 	b, _ := json.Marshal(notif)
 	_ = ws.WriteMessage(websocket.TextMessage, b)
-}
-
-func (s *chatService) buildGenerationParams() *llm.GenerationParams {
-	var gp llm.GenerationParams
-	if config.Conf.LLM.Generation.Temperature != 0 {
-		t := config.Conf.LLM.Generation.Temperature
-		gp.Temperature = &t
-	}
-	if config.Conf.LLM.Generation.TopP != 0 {
-		p := config.Conf.LLM.Generation.TopP
-		gp.TopP = &p
-	}
-	if config.Conf.LLM.Generation.MaxTokens != 0 {
-		m := config.Conf.LLM.Generation.MaxTokens
-		gp.MaxTokens = &m
-	}
-	if gp.Temperature == nil && gp.TopP == nil && gp.MaxTokens == nil {
-		return nil
-	}
-	return &gp
 }

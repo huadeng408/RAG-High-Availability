@@ -55,6 +55,7 @@ func (m *JWTManager) GenerateRefreshToken(userID uint, username, role string) (s
 	return m.generateToken(userID, username, role, TokenTypeRefresh, m.refreshTokenDur)
 }
 
+// generateToken handles generate token.
 func (m *JWTManager) generateToken(userID uint, username, role, tokenType string, duration time.Duration) (string, error) {
 	claims := CustomClaims{
 		UserID:    userID,

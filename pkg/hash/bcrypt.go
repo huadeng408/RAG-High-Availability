@@ -1,3 +1,4 @@
+// Package hash contains hash helpers.
 package hash
 
 import "golang.org/x/crypto/bcrypt"

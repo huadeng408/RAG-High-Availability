@@ -173,8 +173,9 @@ services:
     ports:
       - "8009:8009"
     environment:
-      EMBEDDING_MODEL: "jinaai/jina-embeddings-v2-base-zh"
-      EMBEDDING_THREADS: "4"
+      EMBEDDING_MODEL: "BAAI/bge-small-zh-v1.5"
+      EMBEDDING_THREADS: "2"
+      EMBEDDING_OUTPUT_DIMENSIONS: "2048"
     volumes:
       - embedding-cache:/root/.cache
 

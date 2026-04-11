@@ -20,6 +20,7 @@ type Client interface {
 	CreateEmbeddings(ctx context.Context, texts []string) ([][]float32, error)
 }
 
+// openAICompatibleClient stores the state for the open ai compatible client.
 type openAICompatibleClient struct {
 	cfg    config.EmbeddingConfig
 	client *http.Client
@@ -33,24 +34,28 @@ func NewClient(cfg config.EmbeddingConfig) Client {
 	}
 }
 
+// embeddingRequest describes the embedding request payload.
 type embeddingRequest struct {
 	Model      string   `json:"model"`
 	Input      []string `json:"input"`
 	Dimensions int      `json:"dimensions,omitempty"`
 }
 
+// embeddingResponse describes the embedding response payload.
 type embeddingResponse struct {
 	Data []struct {
 		Embedding []float32 `json:"embedding"`
 	} `json:"data"`
 }
 
+// apiError represents an API error.
 type apiError struct {
 	statusCode int
 	statusText string
 	body       string
 }
 
+// Error handles error.
 func (e *apiError) Error() string {
 	if strings.TrimSpace(e.body) == "" {
 		return fmt.Sprintf("embedding api returned non-200 status: %s", e.statusText)
@@ -70,6 +75,7 @@ func (c *openAICompatibleClient) CreateEmbedding(ctx context.Context, text strin
 	return vectors[0], nil
 }
 
+// CreateEmbeddings creates embeddings.
 func (c *openAICompatibleClient) CreateEmbeddings(ctx context.Context, texts []string) ([][]float32, error) {
 	if len(texts) == 0 {
 		return [][]float32{}, nil
@@ -98,6 +104,7 @@ func (c *openAICompatibleClient) CreateEmbeddings(ctx context.Context, texts []s
 	return nil, err
 }
 
+// createEmbeddingsWithRetry creates embeddings with retry.
 func (c *openAICompatibleClient) createEmbeddingsWithRetry(ctx context.Context, reqBody embeddingRequest) ([][]float32, error) {
 	const maxAttempts = 3
 	baseBackoff := 250 * time.Millisecond
@@ -126,6 +133,7 @@ func (c *openAICompatibleClient) createEmbeddingsWithRetry(ctx context.Context, 
 	return nil, lastErr
 }
 
+// createEmbeddingsOnce creates embeddings once.
 func (c *openAICompatibleClient) createEmbeddingsOnce(ctx context.Context, reqBody embeddingRequest) ([][]float32, error) {
 	reqBytes, err := json.Marshal(reqBody)
 	if err != nil {
@@ -176,6 +184,7 @@ func (c *openAICompatibleClient) createEmbeddingsOnce(ctx context.Context, reqBo
 	return vectors, nil
 }
 
+// isRetriableEmbeddingError reports whether retriable embedding error.
 func isRetriableEmbeddingError(err error) bool {
 	var apiErr *apiError
 	if !asAPIError(err, &apiErr) {
@@ -191,6 +200,7 @@ func isRetriableEmbeddingError(err error) bool {
 	}
 }
 
+// isDimensionsUnsupported reports whether dimensions unsupported.
 func isDimensionsUnsupported(err error) bool {
 	msg := strings.ToLower(err.Error())
 	if strings.Contains(msg, "dimensions") && (strings.Contains(msg, "unsupported") || strings.Contains(msg, "unknown") || strings.Contains(msg, "invalid")) {
@@ -202,6 +212,7 @@ func isDimensionsUnsupported(err error) bool {
 	return false
 }
 
+// asAPIError handles as API error.
 func asAPIError(err error, out **apiError) bool {
 	if err == nil {
 		return false

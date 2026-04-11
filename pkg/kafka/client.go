@@ -23,6 +23,7 @@ type TaskProcessor interface {
 	Process(ctx context.Context, task tasks.FileProcessingTask) error
 }
 
+// topicSet represents a topic set.
 type topicSet struct {
 	parse string
 	chunk string
@@ -38,6 +39,7 @@ var (
 	producerDialer *kafka.Dialer
 )
 
+// normalizeKafkaConfig normalizes kafka config.
 func normalizeKafkaConfig(cfg config.KafkaConfig) config.KafkaConfig {
 	if cfg.ConsumerGroupPrefix == "" {
 		cfg.ConsumerGroupPrefix = "pai-smart-go"
@@ -118,6 +120,7 @@ func InitProducer(cfg config.KafkaConfig) {
 	log.Infof("Kafka 生产者初始化成功, topics=%v", []string{topics.parse, topics.chunk, topics.embed, topics.index, topics.dlq})
 }
 
+// topicByStage handles topic by stage.
 func topicByStage(stage tasks.Stage) string {
 	switch stage {
 	case tasks.StageParse:
@@ -133,6 +136,7 @@ func topicByStage(stage tasks.Stage) string {
 	}
 }
 
+// produceToTopic handles produce to topic.
 func produceToTopic(ctx context.Context, topic string, task tasks.FileProcessingTask) error {
 	if writers == nil {
 		return errors.New("kafka producer not initialized")
@@ -188,6 +192,7 @@ func produceToTopic(ctx context.Context, topic string, task tasks.FileProcessing
 	return lastErr
 }
 
+// produceByLeaderDial handles produce by leader dial.
 func produceByLeaderDial(ctx context.Context, topic string, taskBytes []byte) error {
 	if producerDialer == nil {
 		return errors.New("kafka producer dialer not initialized")
@@ -230,10 +235,12 @@ func ProduceFileTask(task tasks.FileProcessingTask) error {
 	return produceToTopic(context.Background(), topicByStage(task.Stage), task)
 }
 
+// ProduceTask handles produce task.
 func ProduceTask(task tasks.FileProcessingTask) error {
 	return produceToTopic(context.Background(), topicByStage(task.Stage), task)
 }
 
+// ProduceTaskToDLQ handles produce task to dlq.
 func ProduceTaskToDLQ(task tasks.FileProcessingTask) error {
 	return produceToTopic(context.Background(), topics.dlq, task)
 }
@@ -247,6 +254,7 @@ func StartPipelineConsumers(cfg config.KafkaConfig, processor TaskProcessor, tra
 	go consumeStage(cfg, tracker, processor, tasks.StageIndex, cfg.Topics.Index, cfg.ConsumerGroupPrefix+"-index")
 }
 
+// consumeStage handles consume stage.
 func consumeStage(cfg config.KafkaConfig, tracker repository.PipelineTaskRepository, processor TaskProcessor, stage tasks.Stage, topic, groupID string) {
 	brokers := parseKafkaBrokers(cfg.Brokers)
 	dialer := &kafka.Dialer{
@@ -346,6 +354,7 @@ func consumeStage(cfg config.KafkaConfig, tracker repository.PipelineTaskReposit
 	}
 }
 
+// parseKafkaBrokers handles parse kafka brokers.
 func parseKafkaBrokers(raw string) []string {
 	parts := strings.Split(raw, ",")
 	brokers := make([]string, 0, len(parts))
@@ -361,6 +370,7 @@ func parseKafkaBrokers(raw string) []string {
 	return brokers
 }
 
+// isRetriableProduceError reports whether retriable produce error.
 func isRetriableProduceError(err error) bool {
 	if err == nil {
 		return false
@@ -384,6 +394,7 @@ func isRetriableProduceError(err error) bool {
 		strings.Contains(msg, "unexpected eof")
 }
 
+// maxInt returns the larger of two integers.
 func maxInt(a, b int) int {
 	if a > b {
 		return a

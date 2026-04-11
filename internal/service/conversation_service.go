@@ -14,6 +14,7 @@ type ConversationService interface {
 	AddMessageToConversation(ctx context.Context, userID uint, message model.ChatMessage) error
 }
 
+// conversationService implements conversation operations.
 type conversationService struct {
 	repo repository.ConversationRepository
 }

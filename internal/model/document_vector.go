@@ -1,3 +1,4 @@
+// Package model contains persistent models and DTOs.
 package model
 
 // DocumentVector 对应于数据库中的 document_vectors 表。
@@ -13,6 +14,7 @@ type DocumentVector struct {
 	IsPublic     bool   `gorm:"not null;default:false;column:is_public"`
 }
 
+// TableName handles table name.
 func (DocumentVector) TableName() string {
 	return "document_vectors"
 }

@@ -1,3 +1,4 @@
+// Package handler contains HTTP and WebSocket endpoint handlers.
 package handler
 
 import (
@@ -11,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// calculateProgress calculates progress.
 func calculateProgress(uploadedChunks []int, totalChunks int) float64 {
 	if totalChunks == 0 {
 		return 0
@@ -18,18 +20,22 @@ func calculateProgress(uploadedChunks []int, totalChunks int) float64 {
 	return (float64(len(uploadedChunks)) / float64(totalChunks)) * 100
 }
 
+// UploadHandler handles upload requests.
 type UploadHandler struct {
 	uploadService service.UploadService
 }
 
+// NewUploadHandler creates an upload handler.
 func NewUploadHandler(uploadService service.UploadService) *UploadHandler {
 	return &UploadHandler{uploadService: uploadService}
 }
 
+// CheckFileRequest describes the check file request payload.
 type CheckFileRequest struct {
 	MD5 string `json:"md5" binding:"required"`
 }
 
+// CheckFile checks file.
 func (h *UploadHandler) CheckFile(c *gin.Context) {
 	var req CheckFileRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -53,6 +59,7 @@ func (h *UploadHandler) CheckFile(c *gin.Context) {
 	})
 }
 
+// UploadChunk uploads chunk.
 func (h *UploadHandler) UploadChunk(c *gin.Context) {
 	fileMD5 := c.PostForm("fileMd5")
 	fileName := c.PostForm("fileName")
@@ -127,11 +134,13 @@ func (h *UploadHandler) UploadChunk(c *gin.Context) {
 	})
 }
 
+// MergeChunksRequest describes the merge chunks request payload.
 type MergeChunksRequest struct {
 	MD5      string `json:"fileMd5" binding:"required"`
 	FileName string `json:"fileName" binding:"required"`
 }
 
+// MergeChunks merges chunks.
 func (h *UploadHandler) MergeChunks(c *gin.Context) {
 	var req MergeChunksRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -156,6 +165,7 @@ func (h *UploadHandler) MergeChunks(c *gin.Context) {
 	})
 }
 
+// GetUploadStatus returns upload status.
 func (h *UploadHandler) GetUploadStatus(c *gin.Context) {
 	fileMD5 := c.Query("file_md5")
 	if fileMD5 == "" {
@@ -194,6 +204,7 @@ func (h *UploadHandler) GetUploadStatus(c *gin.Context) {
 	})
 }
 
+// GetSupportedFileTypes returns supported file types.
 func (h *UploadHandler) GetSupportedFileTypes(c *gin.Context) {
 	types, err := h.uploadService.GetSupportedFileTypes()
 	if err != nil {
@@ -208,6 +219,7 @@ func (h *UploadHandler) GetSupportedFileTypes(c *gin.Context) {
 	})
 }
 
+// FastUpload handles fast upload.
 func (h *UploadHandler) FastUpload(c *gin.Context) {
 	var req struct {
 		MD5 string `json:"md5"`

@@ -22,9 +22,9 @@ type Config struct {
 	MinIO         MinIOConfig         `mapstructure:"minio"`
 	Embedding     EmbeddingConfig     `mapstructure:"embedding"`
 	LLM           LLMConfig           `mapstructure:"llm"`
-	Agent         AgentConfig         `mapstructure:"agent"`
 	Retrieval     RetrievalConfig     `mapstructure:"retrieval"`
 	Reranker      RerankerConfig      `mapstructure:"reranker"`
+	Memory        MemoryConfig        `mapstructure:"memory"`
 	AI            AIConfig            `mapstructure:"ai"`
 }
 
@@ -78,6 +78,7 @@ type KafkaConfig struct {
 	ESBulkBatchSize     int               `mapstructure:"es_bulk_batch_size"`
 }
 
+// KafkaTopicsConfig stores kafka topics configuration.
 type KafkaTopicsConfig struct {
 	Parse string `mapstructure:"parse"`
 	Chunk string `mapstructure:"chunk"`
@@ -125,20 +126,6 @@ type LLMConfig struct {
 	Prompt     LLMPromptConfig     `mapstructure:"prompt"`
 }
 
-type AgentConfig struct {
-	Enabled       bool    `mapstructure:"enabled"`
-	BaseURL       string  `mapstructure:"base_url"`
-	APIKey        string  `mapstructure:"api_key"`
-	Model         string  `mapstructure:"model"`
-	NativeOllama  bool    `mapstructure:"native_ollama"`
-	ContextWindow int     `mapstructure:"context_window"`
-	TimeoutMs     int     `mapstructure:"timeout_ms"`
-	MaxSubQueries int     `mapstructure:"max_sub_queries"`
-	HistoryTurns  int     `mapstructure:"history_turns"`
-	Temperature   float64 `mapstructure:"temperature"`
-	MaxTokens     int     `mapstructure:"max_tokens"`
-}
-
 // LLMGenerationConfig 配置生成相关参数（可选）。
 type LLMGenerationConfig struct {
 	Temperature float64 `mapstructure:"temperature"`
@@ -154,6 +141,7 @@ type LLMPromptConfig struct {
 	NoResultText string `mapstructure:"no_result_text"`
 }
 
+// RetrievalConfig stores retrieval configuration.
 type RetrievalConfig struct {
 	BM25TopN        int `mapstructure:"bm25_topn"`
 	VectorTopN      int `mapstructure:"vector_topn"`
@@ -163,6 +151,7 @@ type RetrievalConfig struct {
 	RerankTimeoutMs int `mapstructure:"rerank_timeout_ms"`
 }
 
+// RerankerConfig stores reranker configuration.
 type RerankerConfig struct {
 	Enabled bool   `mapstructure:"enabled"`
 	BaseURL string `mapstructure:"base_url"`
@@ -170,18 +159,46 @@ type RerankerConfig struct {
 	Model   string `mapstructure:"model"`
 }
 
-// AIConfig 对齐 Java 的 ai.prompt/ai.generation（连字符键）
-type AIConfig struct {
-	Generation AIGenerationConfig `mapstructure:"generation"`
-	Prompt     AIPromptConfig     `mapstructure:"prompt"`
+// MemoryConfig stores memory configuration.
+type MemoryConfig struct {
+	Enabled                bool    `mapstructure:"enabled"`
+	MemoryIndexName        string  `mapstructure:"memory_index_name"`
+	SensoryMaxMessages     int     `mapstructure:"sensory_max_messages"`
+	SensoryMaxTokens       int     `mapstructure:"sensory_max_tokens"`
+	WorkingTriggerMessages int     `mapstructure:"working_trigger_messages"`
+	WorkingMaxFacts        int     `mapstructure:"working_max_facts"`
+	WorkingHistoryMessages int     `mapstructure:"working_history_messages"`
+	ProfileMaxSlots        int     `mapstructure:"profile_max_slots"`
+	LongTermTopK           int     `mapstructure:"long_term_topk"`
+	ContextTopK            int     `mapstructure:"context_topk"`
+	LongTermMinImportance  float64 `mapstructure:"long_term_min_importance"`
 }
 
+// AIConfig 对齐 Java 的 ai.prompt/ai.generation（连字符键）
+type AIConfig struct {
+	Orchestrator AIOrchestratorConfig `mapstructure:"orchestrator"`
+	Generation   AIGenerationConfig   `mapstructure:"generation"`
+	Prompt       AIPromptConfig       `mapstructure:"prompt"`
+}
+
+// AIOrchestratorConfig stores the external LangGraph service integration settings.
+type AIOrchestratorConfig struct {
+	Enabled            bool   `mapstructure:"enabled"`
+	IngestionEnabled   bool   `mapstructure:"ingestion_enabled"`
+	BaseURL            string `mapstructure:"base_url"`
+	TimeoutMs          int    `mapstructure:"timeout_ms"`
+	IngestionTimeoutMs int    `mapstructure:"ingestion_timeout_ms"`
+	SharedSecret       string `mapstructure:"shared_secret"`
+}
+
+// AIGenerationConfig stores ai generation configuration.
 type AIGenerationConfig struct {
 	Temperature float64 `mapstructure:"temperature"`
 	TopP        float64 `mapstructure:"top-p"`
 	MaxTokens   int     `mapstructure:"max-tokens"`
 }
 
+// AIPromptConfig stores ai prompt configuration.
 type AIPromptConfig struct {
 	Rules        string `mapstructure:"rules"`
 	RefStart     string `mapstructure:"ref-start"`

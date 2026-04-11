@@ -1,3 +1,4 @@
+// Package model contains persistent models and DTOs.
 package model
 
 import "time"
@@ -23,7 +24,7 @@ type PipelineTask struct {
 	CreatedAt      time.Time `gorm:"autoCreateTime" json:"createdAt"`
 }
 
+// TableName handles table name.
 func (PipelineTask) TableName() string {
 	return "pipeline_task"
 }
-

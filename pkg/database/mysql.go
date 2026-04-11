@@ -1,3 +1,4 @@
+// Package database contains shared database clients.
 package database
 
 import (
@@ -7,6 +8,7 @@ import (
 	"time"
 )
 
+// DB stores the shared MySQL connection.
 var DB *gorm.DB
 
 // InitMySQL 初始化 MySQL 数据库连接

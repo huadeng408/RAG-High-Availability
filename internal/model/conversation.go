@@ -19,6 +19,7 @@ type Conversation struct {
 	CreatedAt time.Time `gorm:"autoCreateTime" json:"createdAt"`
 }
 
+// TableName handles table name.
 func (Conversation) TableName() string {
 	return "conversations"
 }

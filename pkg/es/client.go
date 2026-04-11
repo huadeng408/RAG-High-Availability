@@ -1,3 +1,4 @@
+// Package es contains Elasticsearch helpers.
 package es
 
 import (
@@ -21,8 +22,10 @@ import (
 	"github.com/elastic/go-elasticsearch/v8/esapi"
 )
 
+// ESClient stores the shared Elasticsearch client instance.
 var ESClient *elasticsearch.Client
 
+// InitES initializes the shared Elasticsearch client and ensures the main document index exists.
 func InitES(esCfg config.ElasticsearchConfig, vectorDims int) error {
 	if vectorDims <= 0 {
 		vectorDims = 2048
@@ -42,6 +45,67 @@ func InitES(esCfg config.ElasticsearchConfig, vectorDims int) error {
 	return createIndexIfNotExists(esCfg.IndexName, vectorDims)
 }
 
+// EnsureMemoryIndex creates the long-term memory index when memory support is enabled.
+func EnsureMemoryIndex(indexName string, vectorDims int) error {
+	if strings.TrimSpace(indexName) == "" {
+		return nil
+	}
+	if vectorDims <= 0 {
+		vectorDims = 2048
+	}
+
+	res, err := ESClient.Indices.Exists([]string{indexName})
+	if err != nil {
+		log.Errorf("failed to check memory index existence: %v", err)
+		return err
+	}
+	defer res.Body.Close()
+
+	if !res.IsError() && res.StatusCode == http.StatusOK {
+		log.Infof("memory index '%s' already exists", indexName)
+		return nil
+	}
+	if res.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("unexpected status when checking memory index existence: %d", res.StatusCode)
+	}
+
+	mapping := fmt.Sprintf(`{
+		"mappings": {
+			"properties": {
+				"memory_id": { "type": "keyword" },
+				"user_id": { "type": "long" },
+				"conversation_id": { "type": "keyword" },
+				"memory_type": { "type": "keyword" },
+				"text_content": {
+					"type": "text",
+					"analyzer": "ik_max_word",
+					"search_analyzer": "ik_smart"
+				},
+				"vector": {
+					"type": "dense_vector",
+					"dims": %d,
+					"index": true,
+					"similarity": "cosine"
+				},
+				"importance": { "type": "float" },
+				"created_at": { "type": "date" }
+			}
+		}
+	}`, vectorDims)
+
+	res, err = ESClient.Indices.Create(indexName, ESClient.Indices.Create.WithBody(strings.NewReader(mapping)))
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.IsError() {
+		bodyBytes, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("failed to create memory index: status=%s body=%s", res.Status(), strings.TrimSpace(string(bodyBytes)))
+	}
+	return nil
+}
+
+// createIndexIfNotExists creates the main document index if it does not already exist.
 func createIndexIfNotExists(indexName string, vectorDims int) error {
 	res, err := ESClient.Indices.Exists([]string{indexName})
 	if err != nil {
@@ -98,6 +162,7 @@ func createIndexIfNotExists(indexName string, vectorDims int) error {
 	return nil
 }
 
+// GetIndexVectorDims reads the configured dense-vector dimension from an index mapping.
 func GetIndexVectorDims(ctx context.Context, indexName, fieldName string) (int, error) {
 	res, err := ESClient.Indices.GetMapping(ESClient.Indices.GetMapping.WithContext(ctx), ESClient.Indices.GetMapping.WithIndex(indexName))
 	if err != nil {
@@ -149,6 +214,7 @@ func GetIndexVectorDims(ctx context.Context, indexName, fieldName string) (int, 
 	}
 }
 
+// IndexDocument writes one knowledge document into Elasticsearch.
 func IndexDocument(ctx context.Context, indexName string, doc model.EsDocument) error {
 	docBytes, err := json.Marshal(doc)
 	if err != nil {
@@ -172,6 +238,32 @@ func IndexDocument(ctx context.Context, indexName string, doc model.EsDocument) 
 	return nil
 }
 
+// IndexMemoryDocument writes one memory document into Elasticsearch.
+func IndexMemoryDocument(ctx context.Context, indexName string, doc model.MemoryEsDocument) error {
+	docBytes, err := json.Marshal(doc)
+	if err != nil {
+		return err
+	}
+
+	req := esapi.IndexRequest{
+		Index:      indexName,
+		DocumentID: doc.MemoryID,
+		Body:       bytes.NewReader(docBytes),
+		Refresh:    "true",
+	}
+	res, err := req.Do(ctx, ESClient)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.IsError() {
+		bodyBytes, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("failed to index memory document: status=%s body=%s", res.Status(), strings.TrimSpace(string(bodyBytes)))
+	}
+	return nil
+}
+
+// BulkIndexDocuments writes multiple knowledge documents with the Elasticsearch bulk API.
 func BulkIndexDocuments(ctx context.Context, indexName string, docs []model.EsDocument) error {
 	if len(docs) == 0 {
 		return nil

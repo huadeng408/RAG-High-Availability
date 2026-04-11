@@ -1,3 +1,4 @@
+// Package model contains persistent models and DTOs.
 package model
 
 import "strings"
@@ -10,6 +11,7 @@ const (
 	RetrievalModeVector RetrievalMode = "vector"
 )
 
+// AgentPlan represents an agent plan.
 type AgentPlan struct {
 	Intent         string        `json:"intent"`
 	RewrittenQuery string        `json:"rewritten_query"`
@@ -21,6 +23,7 @@ type AgentPlan struct {
 	Reason         string        `json:"reason,omitempty"`
 }
 
+// DefaultAgentPlan returns the default agent plan.
 func DefaultAgentPlan(query string) AgentPlan {
 	return AgentPlan{
 		Intent:         "single_hop",

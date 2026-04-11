@@ -169,6 +169,7 @@ func (h *ChatHandler) Handle(c *gin.Context) {
 	}
 }
 
+// sessionKey returns the in-memory key used to track one websocket session.
 func sessionKey(conn *websocket.Conn) string {
 	return fmt.Sprintf("%p", conn)
 }

@@ -1,3 +1,4 @@
+// Package handler contains HTTP and WebSocket endpoint handlers.
 package handler
 
 import (
@@ -12,16 +13,19 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// SearchHandler handles search requests.
 type SearchHandler struct {
 	searchService service.SearchService
 }
 
+// NewSearchHandler creates a search handler.
 func NewSearchHandler(searchService service.SearchService) *SearchHandler {
 	return &SearchHandler{
 		searchService: searchService,
 	}
 }
 
+// HybridSearch handles hybrid search.
 func (h *SearchHandler) HybridSearch(c *gin.Context) {
 	query := c.Query("query")
 	log.Infof("[SearchHandler] receive hybrid search request, query=%s", query)

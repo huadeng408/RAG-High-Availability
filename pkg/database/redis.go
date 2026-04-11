@@ -1,3 +1,4 @@
+// Package database contains shared database clients.
 package database
 
 import (
@@ -6,6 +7,7 @@ import (
 	"pai-smart-go/pkg/log"
 )
 
+// RDB stores the shared Redis client.
 var RDB *redis.Client
 
 // InitRedis 初始化 Redis 客户端连接

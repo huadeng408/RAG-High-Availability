@@ -1,3 +1,4 @@
+// Package reranker contains reranker client integration.
 package reranker
 
 import (
@@ -13,36 +14,44 @@ import (
 	"pai-smart-go/internal/config"
 )
 
+// Document represents a document.
 type Document struct {
 	ID   string
 	Text string
 }
 
+// Result stores the  result.
 type Result struct {
 	Index int
 	Score float64
 }
 
+// Client defines the  client.
 type Client interface {
 	Enabled() bool
 	Rerank(ctx context.Context, query string, documents []Document, topN int) ([]Result, error)
 }
 
+// noopClient stores the state for the noop client.
 type noopClient struct{}
 
+// Enabled handles enabled.
 func (noopClient) Enabled() bool {
 	return false
 }
 
+// Rerank handles rerank.
 func (noopClient) Rerank(ctx context.Context, query string, documents []Document, topN int) ([]Result, error) {
 	return nil, fmt.Errorf("reranker is disabled")
 }
 
+// httpClient stores the state for the http client.
 type httpClient struct {
 	cfg    config.RerankerConfig
 	client *http.Client
 }
 
+// rerankRequest describes the rerank request payload.
 type rerankRequest struct {
 	Model     string   `json:"model,omitempty"`
 	Query     string   `json:"query"`
@@ -50,6 +59,7 @@ type rerankRequest struct {
 	TopN      int      `json:"top_n,omitempty"`
 }
 
+// rerankResponse describes the rerank response payload.
 type rerankResponse struct {
 	Results []struct {
 		Index          int     `json:"index"`
@@ -63,6 +73,7 @@ type rerankResponse struct {
 	} `json:"data"`
 }
 
+// NewClient creates a client.
 func NewClient(cfg config.RerankerConfig) Client {
 	if !cfg.Enabled {
 		return noopClient{}
@@ -76,10 +87,12 @@ func NewClient(cfg config.RerankerConfig) Client {
 	}
 }
 
+// Enabled handles enabled.
 func (c *httpClient) Enabled() bool {
 	return true
 }
 
+// Rerank handles rerank.
 func (c *httpClient) Rerank(ctx context.Context, query string, documents []Document, topN int) ([]Result, error) {
 	if len(documents) == 0 {
 		return []Result{}, nil
@@ -157,6 +170,7 @@ func (c *httpClient) Rerank(ctx context.Context, query string, documents []Docum
 	return results, nil
 }
 
+// buildEndpointURL builds endpoint URL.
 func buildEndpointURL(baseURL string) string {
 	switch {
 	case strings.HasSuffix(baseURL, "/rerank"), strings.HasSuffix(baseURL, "/reranks"):

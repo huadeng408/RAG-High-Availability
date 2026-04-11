@@ -1,3 +1,4 @@
+// Package main contains executable entrypoints.
 package main
 
 import (
@@ -22,13 +23,12 @@ import (
 	"pai-smart-go/internal/pipeline"
 	"pai-smart-go/internal/repository"
 	"pai-smart-go/internal/service"
-	agentclient "pai-smart-go/pkg/agent"
 	"pai-smart-go/pkg/database"
 	"pai-smart-go/pkg/embedding"
 	"pai-smart-go/pkg/es"
 	"pai-smart-go/pkg/kafka"
-	"pai-smart-go/pkg/llm"
 	"pai-smart-go/pkg/log"
+	"pai-smart-go/pkg/orchestrator"
 	"pai-smart-go/pkg/reranker"
 	"pai-smart-go/pkg/storage"
 	"pai-smart-go/pkg/tika"
@@ -37,6 +37,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// main bootstraps infrastructure dependencies and starts the HTTP server.
 func main() {
 	configPath := strings.TrimSpace(os.Getenv("PAISMART_CONFIG"))
 	if configPath == "" {
@@ -48,14 +49,28 @@ func main() {
 	log.Init(cfg.Log.Level, cfg.Log.Format, cfg.Log.OutputPath)
 	defer log.Sync()
 
+	if !cfg.AI.Orchestrator.Enabled || strings.TrimSpace(cfg.AI.Orchestrator.BaseURL) == "" {
+		log.Errorf("LangGraph orchestrator must be enabled with a non-empty base_url; local chat orchestration has been removed")
+		return
+	}
+	if strings.TrimSpace(cfg.AI.Orchestrator.SharedSecret) == "" {
+		log.Errorf("LangGraph orchestrator shared_secret must be configured; local chat orchestration has been removed")
+		return
+	}
+
 	database.InitMySQL(cfg.Database.MySQL.DSN)
 	database.InitRedis(cfg.Database.Redis.Addr, cfg.Database.Redis.Password, cfg.Database.Redis.DB)
 	if err := database.EnsureRuntimeSchema(); err != nil {
 		log.Errorf("failed to apply runtime schema migration: %v", err)
 		return
 	}
-	if err := database.DB.AutoMigrate(&model.PipelineTask{}); err != nil {
-		log.Errorf("failed to migrate pipeline_task table: %v", err)
+	if err := database.DB.AutoMigrate(
+		&model.PipelineTask{},
+		&model.WorkingMemorySnapshot{},
+		&model.UserProfileSlot{},
+		&model.LongTermMemory{},
+	); err != nil {
+		log.Errorf("failed to migrate runtime tables: %v", err)
 		return
 	}
 
@@ -63,6 +78,12 @@ func main() {
 	if err := es.InitES(cfg.Elasticsearch, cfg.Embedding.Dimensions); err != nil {
 		log.Errorf("failed to init elasticsearch: %v", err)
 		return
+	}
+	if cfg.Memory.Enabled {
+		if err := es.EnsureMemoryIndex(cfg.Memory.MemoryIndexName, cfg.Embedding.Dimensions); err != nil {
+			log.Errorf("failed to init memory index: %v", err)
+			return
+		}
 	}
 	kafka.InitProducer(cfg.Kafka)
 
@@ -72,12 +93,14 @@ func main() {
 	conversationRepo := repository.NewConversationRepository(database.RDB)
 	docVectorRepo := repository.NewDocumentVectorRepository(database.DB)
 	pipelineTaskRepo := repository.NewPipelineTaskRepository(database.DB)
+	memoryRepo := repository.NewMemoryRepository(database.DB)
 
 	jwtManager := token.NewJWTManager(cfg.JWT.Secret, cfg.JWT.AccessTokenExpireHours, cfg.JWT.RefreshTokenExpireDays)
 	tikaClient := tika.NewClient(cfg.Tika)
 	embeddingClient := embedding.NewClient(cfg.Embedding)
-	llmClient := llm.NewClient(cfg.LLM)
-	agentPlannerClient := agentclient.NewClient(cfg.Agent)
+	orchestratorClient := orchestrator.NewClient(cfg.AI.Orchestrator)
+	orchestratorMemoryClient := orchestrator.NewMemoryClient(cfg.AI.Orchestrator)
+	ingestionClient := orchestrator.NewIngestionClient(cfg.AI.Orchestrator)
 	rerankerClient := reranker.NewClient(cfg.Reranker)
 
 	userService := service.NewUserService(userRepository, orgTagRepo, jwtManager)
@@ -94,8 +117,9 @@ func main() {
 		cfg.Retrieval,
 	)
 	conversationService := service.NewConversationService(conversationRepo)
-	agentService := service.NewAgentService(agentPlannerClient, cfg.Agent)
-	chatService := service.NewChatService(searchService, agentService, llmClient, conversationRepo)
+	memoryService := service.NewMemoryService(memoryRepo, embeddingClient, orchestratorMemoryClient, rerankerClient, es.ESClient, cfg.Memory)
+	orchestratorSupportService := service.NewOrchestratorSupportService(searchService, memoryService, conversationRepo, rerankerClient)
+	chatService := service.NewChatService(searchService, memoryService, conversationRepo, orchestratorClient)
 
 	processor := pipeline.NewProcessor(
 		tikaClient,
@@ -106,6 +130,7 @@ func main() {
 		cfg.Kafka,
 		uploadRepo,
 		docVectorRepo,
+		ingestionClient,
 	)
 	go kafka.StartPipelineConsumers(cfg.Kafka, processor, pipelineTaskRepo)
 
@@ -125,6 +150,9 @@ func main() {
 		c.Next()
 	})
 	r.Use(middleware.RequestLogger(), gin.Recovery())
+	r.GET("/healthz", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
 
 	apiV1 := r.Group("/api/v1")
 	{
@@ -208,6 +236,19 @@ func main() {
 				orgTags.DELETE("/:id", ah.DeleteOrganizationTag)
 			}
 		}
+
+		internalGroup := r.Group("/internal")
+		internalGroup.Use(middleware.InternalAuthMiddleware())
+		{
+			orchHandler := handler.NewOrchestratorHandler(orchestratorSupportService)
+			internalGroup.POST("/orchestrator/session", orchHandler.LoadSession)
+			internalGroup.POST("/orchestrator/retrieve", orchHandler.RetrieveContext)
+			internalGroup.POST("/orchestrator/prompt-context", orchHandler.PreparePromptContext)
+			internalGroup.POST("/orchestrator/knowledge-search", orchHandler.SearchKnowledge)
+			internalGroup.POST("/orchestrator/memory-search", orchHandler.SearchMemory)
+			internalGroup.POST("/orchestrator/rerank-context", orchHandler.RerankContext)
+			internalGroup.POST("/orchestrator/persist", orchHandler.PersistTurn)
+		}
 	}
 
 	srv := &http.Server{Addr: fmt.Sprintf(":%s", cfg.Server.Port), Handler: r}
@@ -232,6 +273,7 @@ func main() {
 	log.Info("server stopped")
 }
 
+// initSeedFiles imports local seed files through the normal upload pipeline on startup.
 func initSeedFiles(ctx context.Context, dir string, userRepo repository.UserRepository, uploadSvc service.UploadService) {
 	info, err := os.Stat(dir)
 	if err != nil || !info.IsDir() {
@@ -327,11 +369,19 @@ func initSeedFiles(ctx context.Context, dir string, userRepo repository.UserRepo
 	}
 }
 
+// chunkFile wraps an in-memory reader so startup imports can reuse the chunk upload API.
 type chunkFile struct{ Reader *bytes.Reader }
 
-func (c *chunkFile) Read(p []byte) (int, error)              { return c.Reader.Read(p) }
+// Read proxies sequential reads to the underlying in-memory chunk buffer.
+func (c *chunkFile) Read(p []byte) (int, error) { return c.Reader.Read(p) }
+
+// ReadAt proxies random-access reads to the underlying in-memory chunk buffer.
 func (c *chunkFile) ReadAt(p []byte, off int64) (int, error) { return c.Reader.ReadAt(p, off) }
+
+// Seek repositions the in-memory chunk reader.
 func (c *chunkFile) Seek(offset int64, whence int) (int64, error) {
 	return c.Reader.Seek(offset, whence)
 }
+
+// Close satisfies the multipart.File contract for the in-memory chunk wrapper.
 func (c *chunkFile) Close() error { return nil }

@@ -1,3 +1,4 @@
+// Package service contains business logic.
 package service
 
 import (
@@ -15,6 +16,7 @@ import (
 	"gorm.io/gorm"
 )
 
+// UserListResponse describes the user list response payload.
 type UserListResponse struct {
 	Content       []UserDetailResponse `json:"content"`
 	TotalElements int64                `json:"totalElements"`
@@ -23,6 +25,7 @@ type UserListResponse struct {
 	Number        int                  `json:"number"`
 }
 
+// UserDetailResponse describes the user detail response payload.
 type UserDetailResponse struct {
 	UserID     uint            `json:"userId"`
 	Username   string          `json:"username"`
@@ -33,11 +36,13 @@ type UserDetailResponse struct {
 	CreatedAt  model.LocalTime `json:"createdAt"`
 }
 
+// OrgTagDetail represents an org tag detail.
 type OrgTagDetail struct {
 	TagID string `json:"tagId"`
 	Name  string `json:"name"`
 }
 
+// AdminService defines admin operations.
 type AdminService interface {
 	CreateOrganizationTag(tagID, name, description, parentTag string, creator *model.User) (*model.OrganizationTag, error)
 	ListOrganizationTags() ([]model.OrganizationTag, error)
@@ -50,6 +55,7 @@ type AdminService interface {
 	ReplayPipelineTask(fileMD5 string, stage tasks.Stage) error
 }
 
+// adminService implements admin operations.
 type adminService struct {
 	orgTagRepo       repository.OrgTagRepository
 	userRepo         repository.UserRepository
@@ -58,6 +64,7 @@ type adminService struct {
 	uploadRepo       repository.UploadRepository
 }
 
+// NewAdminService creates an admin service.
 func NewAdminService(
 	orgTagRepo repository.OrgTagRepository,
 	userRepo repository.UserRepository,
@@ -74,6 +81,7 @@ func NewAdminService(
 	}
 }
 
+// CreateOrganizationTag creates organization tag.
 func (s *adminService) CreateOrganizationTag(tagID, name, description, parentTag string, creator *model.User) (*model.OrganizationTag, error) {
 	tagID = strings.TrimSpace(tagID)
 	parentTag = strings.TrimSpace(parentTag)
@@ -108,10 +116,12 @@ func (s *adminService) CreateOrganizationTag(tagID, name, description, parentTag
 	return tag, nil
 }
 
+// ListOrganizationTags lists organization tags.
 func (s *adminService) ListOrganizationTags() ([]model.OrganizationTag, error) {
 	return s.orgTagRepo.FindAll()
 }
 
+// GetOrganizationTagTree returns organization tag tree.
 func (s *adminService) GetOrganizationTagTree() ([]*model.OrganizationTagNode, error) {
 	tags, err := s.orgTagRepo.FindAll()
 	if err != nil {
@@ -143,6 +153,7 @@ func (s *adminService) GetOrganizationTagTree() ([]*model.OrganizationTagNode, e
 	return tree, nil
 }
 
+// UpdateOrganizationTag updates organization tag.
 func (s *adminService) UpdateOrganizationTag(tagID string, name, description, parentTag string) (*model.OrganizationTag, error) {
 	tag, err := s.orgTagRepo.FindByID(tagID)
 	if err != nil {
@@ -161,10 +172,12 @@ func (s *adminService) UpdateOrganizationTag(tagID string, name, description, pa
 	return tag, nil
 }
 
+// DeleteOrganizationTag deletes organization tag.
 func (s *adminService) DeleteOrganizationTag(tagID string) error {
 	return s.orgTagRepo.Delete(tagID)
 }
 
+// AssignOrgTagsToUser handles assign org tags to user.
 func (s *adminService) AssignOrgTagsToUser(userID uint, orgTags []string) error {
 	user, err := s.userRepo.FindByID(userID)
 	if err != nil {
@@ -201,6 +214,7 @@ func (s *adminService) AssignOrgTagsToUser(userID uint, orgTags []string) error 
 	return s.userRepo.Update(user)
 }
 
+// ListUsers lists users.
 func (s *adminService) ListUsers(page, size int) (*UserListResponse, error) {
 	if page <= 0 {
 		page = 1
@@ -258,6 +272,7 @@ func (s *adminService) ListUsers(page, size int) (*UserListResponse, error) {
 	}, nil
 }
 
+// GetAllConversations returns all conversations.
 func (s *adminService) GetAllConversations(ctx context.Context, userID *uint, startTime, endTime *time.Time) ([]map[string]interface{}, error) {
 	if userID != nil {
 		user, err := s.userRepo.FindByID(*userID)
@@ -287,6 +302,7 @@ func (s *adminService) GetAllConversations(ctx context.Context, userID *uint, st
 	return allConversations, nil
 }
 
+// getConversationsForUser returns conversations for user.
 func (s *adminService) getConversationsForUser(ctx context.Context, user *model.User, startTime, endTime *time.Time) ([]map[string]interface{}, error) {
 	conversationID, err := s.conversationRepo.GetOrCreateConversationID(ctx, user.ID)
 	if err != nil {
@@ -319,6 +335,7 @@ func (s *adminService) getConversationsForUser(ctx context.Context, user *model.
 	return result, nil
 }
 
+// ReplayPipelineTask handles replay pipeline task.
 func (s *adminService) ReplayPipelineTask(fileMD5 string, stage tasks.Stage) error {
 	fileMD5 = strings.TrimSpace(fileMD5)
 	if fileMD5 == "" {
@@ -348,6 +365,7 @@ func (s *adminService) ReplayPipelineTask(fileMD5 string, stage tasks.Stage) err
 	return kafka.ProduceTask(task)
 }
 
+// containsTag reports whether tag is present.
 func containsTag(tags []string, target string) bool {
 	for _, tag := range tags {
 		if tag == target {

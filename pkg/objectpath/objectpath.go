@@ -1,3 +1,4 @@
+// Package objectpath contains object-storage path helpers.
 package objectpath
 
 import (

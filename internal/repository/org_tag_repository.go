@@ -16,6 +16,7 @@ type OrgTagRepository interface {
 	Delete(id string) error
 }
 
+// orgTagRepository implements persistence operations for org tag data.
 type orgTagRepository struct {
 	db *gorm.DB
 }

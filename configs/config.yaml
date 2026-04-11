@@ -53,9 +53,9 @@ elasticsearch:
 
 # Embedding model config
 embedding:
-  model: "text-embedding-v4"
-  api_key: "sk-0540e78537ed4394901cfc81627fe2a6"
-  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  model: "BAAI/bge-small-zh-v1.5"
+  api_key: ""
+  base_url: "http://127.0.0.1:8009"
   dimensions: 2048
 
 # LLM config
@@ -74,17 +74,6 @@ llm:
     max_tokens: 2000
     top_p: 0.9
 
-agent:
-  enabled: true
-  base_url: "http://127.0.0.1:11434/v1"
-  api_key: ""
-  model: "qwen3:4b"
-  timeout_ms: 1500
-  max_sub_queries: 2
-  history_turns: 6
-  temperature: 0.1
-  max_tokens: 256
-
 retrieval:
   bm25_topn: 100
   vector_topn: 100
@@ -98,3 +87,25 @@ reranker:
   base_url: "http://127.0.0.1:8008"
   api_key: ""
   model: "jinaai/jina-reranker-v2-base-multilingual"
+
+memory:
+  enabled: true
+  memory_index_name: "conversation_memory"
+  sensory_max_messages: 6
+  sensory_max_tokens: 800
+  working_trigger_messages: 8
+  working_max_facts: 6
+  working_history_messages: 12
+  profile_max_slots: 6
+  long_term_topk: 4
+  context_topk: 6
+  long_term_min_importance: 0.45
+
+ai:
+  orchestrator:
+    enabled: true
+    ingestion_enabled: true
+    base_url: "http://127.0.0.1:8090"
+    timeout_ms: 120000
+    ingestion_timeout_ms: 180000
+    shared_secret: "paismart-internal-dev"

@@ -173,6 +173,7 @@ func (s *userService) Logout(accessTokenString, refreshTokenString string) error
 	return nil
 }
 
+// blacklistToken handles blacklist token.
 func (s *userService) blacklistToken(tokenString string) error {
 	tokenString = strings.TrimSpace(tokenString)
 	claims, err := s.jwtManager.VerifyToken(tokenString)
@@ -189,6 +190,7 @@ func (s *userService) blacklistToken(tokenString string) error {
 	return database.RDB.Set(context.Background(), "blacklist:"+tokenString, "true", expiration).Err()
 }
 
+// IsTokenBlacklisted reports whether token blacklisted.
 func (s *userService) IsTokenBlacklisted(tokenString string) (bool, error) {
 	tokenString = strings.TrimSpace(tokenString)
 	exists, err := database.RDB.Exists(context.Background(), "blacklist:"+tokenString).Result()
@@ -352,6 +354,7 @@ func (s *userService) RefreshToken(refreshTokenString string) (newAccessToken, n
 	return newAccessToken, newRefreshToken, nil
 }
 
+// containsExactTag reports whether exact tag is present.
 func containsExactTag(orgTags, target string) bool {
 	if target == "" || orgTags == "" {
 		return false
@@ -364,6 +367,7 @@ func containsExactTag(orgTags, target string) bool {
 	return false
 }
 
+// validateUsername validates username.
 func validateUsername(username string) error {
 	if username == "" {
 		return errors.New("用户名不能为空")

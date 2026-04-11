@@ -1,3 +1,4 @@
+// Package service contains business logic.
 package service
 
 import (
@@ -28,6 +29,7 @@ import (
 
 const DefaultChunkSize = 5 * 1024 * 1024
 
+// UploadService defines upload operations.
 type UploadService interface {
 	CheckFile(ctx context.Context, fileMD5 string, userID uint) (bool, []int, error)
 	UploadChunk(ctx context.Context, fileMD5, fileName string, totalSize int64, chunkIndex int, file multipart.File, chunkMD5 string, userID uint, orgTag string, isPublic bool) (uploadedChunks []int, totalChunks int, err error)
@@ -37,16 +39,19 @@ type UploadService interface {
 	FastUpload(ctx context.Context, fileMD5 string, userID uint) (bool, error)
 }
 
+// uploadService implements upload operations.
 type uploadService struct {
 	uploadRepo repository.UploadRepository
 	userRepo   repository.UserRepository
 	minioCfg   config.MinIOConfig
 }
 
+// NewUploadService creates an upload service.
 func NewUploadService(uploadRepo repository.UploadRepository, userRepo repository.UserRepository, minioCfg config.MinIOConfig) UploadService {
 	return &uploadService{uploadRepo: uploadRepo, userRepo: userRepo, minioCfg: minioCfg}
 }
 
+// CheckFile checks file.
 func (s *uploadService) CheckFile(ctx context.Context, fileMD5 string, userID uint) (bool, []int, error) {
 	record, err := s.uploadRepo.GetFileUploadRecord(fileMD5, userID)
 	if err != nil {
@@ -66,6 +71,7 @@ func (s *uploadService) CheckFile(ctx context.Context, fileMD5 string, userID ui
 	return false, uploaded, nil
 }
 
+// UploadChunk uploads chunk.
 func (s *uploadService) UploadChunk(ctx context.Context, fileMD5, fileName string, totalSize int64, chunkIndex int, file multipart.File, chunkMD5 string, userID uint, orgTag string, isPublic bool) ([]int, int, error) {
 	chunkMD5 = strings.ToLower(strings.TrimSpace(chunkMD5))
 	if chunkMD5 == "" {
@@ -192,6 +198,7 @@ func (s *uploadService) UploadChunk(ctx context.Context, fileMD5, fileName strin
 	return uploaded, totalChunks, nil
 }
 
+// MergeChunks merges chunks.
 func (s *uploadService) MergeChunks(ctx context.Context, fileMD5, fileName string, userID uint) (string, error) {
 	record, err := s.uploadRepo.GetFileUploadRecord(fileMD5, userID)
 	if err != nil {
@@ -265,6 +272,7 @@ func (s *uploadService) MergeChunks(ctx context.Context, fileMD5, fileName strin
 	return objectURL, nil
 }
 
+// GetUploadStatus returns upload status.
 func (s *uploadService) GetUploadStatus(ctx context.Context, fileMD5 string, userID uint) (string, string, []int, int, error) {
 	record, err := s.uploadRepo.GetFileUploadRecord(fileMD5, userID)
 	if err != nil {
@@ -278,6 +286,7 @@ func (s *uploadService) GetUploadStatus(ctx context.Context, fileMD5 string, use
 	return record.FileName, getFileType(record.FileName), uploaded, totalChunks, nil
 }
 
+// GetSupportedFileTypes returns supported file types.
 func (s *uploadService) GetSupportedFileTypes() (map[string]interface{}, error) {
 	typeMapping := map[string]string{
 		".pdf":  "PDF",
@@ -307,6 +316,7 @@ func (s *uploadService) GetSupportedFileTypes() (map[string]interface{}, error) 
 	}, nil
 }
 
+// FastUpload handles fast upload.
 func (s *uploadService) FastUpload(ctx context.Context, fileMD5 string, userID uint) (bool, error) {
 	record, err := s.uploadRepo.GetFileUploadRecord(fileMD5, userID)
 	if err != nil {
@@ -318,6 +328,7 @@ func (s *uploadService) FastUpload(ctx context.Context, fileMD5 string, userID u
 	return record.Status == 1, nil
 }
 
+// calculateTotalChunks calculates total chunks.
 func (s *uploadService) calculateTotalChunks(totalSize int64) int {
 	if totalSize == 0 {
 		return 0
@@ -325,11 +336,13 @@ func (s *uploadService) calculateTotalChunks(totalSize int64) int {
 	return int(math.Ceil(float64(totalSize) / float64(DefaultChunkSize)))
 }
 
+// calculateMD5Hex calculates 5 hex.
 func calculateMD5Hex(data []byte) string {
 	sum := md5.Sum(data)
 	return hex.EncodeToString(sum[:])
 }
 
+// verifyChunkObjectMD5 verifies chunk object 5.
 func (s *uploadService) verifyChunkObjectMD5(ctx context.Context, objectName, expectedMD5 string) error {
 	object, err := storage.MinioClient.GetObject(ctx, s.minioCfg.BucketName, objectName, minio.GetObjectOptions{})
 	if err != nil {
@@ -349,6 +362,7 @@ func (s *uploadService) verifyChunkObjectMD5(ctx context.Context, objectName, ex
 	return nil
 }
 
+// verifyAllChunkIntegrity verifies all chunk integrity.
 func (s *uploadService) verifyAllChunkIntegrity(ctx context.Context, fileMD5 string, totalChunks int) error {
 	chunkRecords, err := s.uploadRepo.GetChunkInfoRecords(fileMD5)
 	if err != nil {
@@ -381,6 +395,7 @@ func (s *uploadService) verifyAllChunkIntegrity(ctx context.Context, fileMD5 str
 	return nil
 }
 
+// getUploadedChunks returns uploaded chunks.
 func (s *uploadService) getUploadedChunks(ctx context.Context, fileMD5 string, userID uint, totalChunks int) ([]int, error) {
 	uploaded, err := s.uploadRepo.GetUploadedChunksFromRedis(ctx, fileMD5, userID, totalChunks)
 	if err != nil {
@@ -412,6 +427,7 @@ func (s *uploadService) getUploadedChunks(ctx context.Context, fileMD5 string, u
 	return result, nil
 }
 
+// getFileType returns file type.
 func getFileType(fileName string) string {
 	if fileName == "" {
 		return "UNKNOWN"

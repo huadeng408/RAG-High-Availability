@@ -4,6 +4,7 @@
 /.gocache
 /.gomodcache
 /.venv-reranker
+/ai-orchestrator/.venv
 /CLAUDE.md
 /text.py
 /homepage
@@ -13,6 +14,7 @@
 /configs/config.benchmark.yaml
 /configs/config.docker-agent-test.yaml
 /deployments/server-linux
+/server.exe
 /docs/benchmark-guide.md
 /docs/docker-kafka-agent-e2e-report-2026-04-07.md
 /docs/notion-capture
@@ -20,6 +22,8 @@
 /frontend/node_modules
 /frontend/.vscode
 /internal/service/logs
+/__pycache__
+**/__pycache__/
 /scripts/__pycache__
 /scripts/build_local_search_benchmark.py
 /scripts/embedding_server.py

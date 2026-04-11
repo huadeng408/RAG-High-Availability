@@ -227,6 +227,7 @@ func (h *AdminHandler) DeleteOrganizationTag(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": http.StatusOK, "message": "Tag deleted successfully", "data": nil})
 }
 
+// ReplayPipelineTask handles replay pipeline task.
 func (h *AdminHandler) ReplayPipelineTask(c *gin.Context) {
 	var req struct {
 		FileMD5 string `json:"fileMd5" binding:"required"`

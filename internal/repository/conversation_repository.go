@@ -19,6 +19,7 @@ type ConversationRepository interface {
 	GetAllUserConversationMappings(ctx context.Context) (map[uint]string, error)
 }
 
+// redisConversationRepository implements persistence operations for redis conversation data.
 type redisConversationRepository struct {
 	redisClient *redis.Client
 }

@@ -67,6 +67,7 @@ func (r *uploadRepository) GetFileUploadRecord(fileMD5 string, userID uint) (*mo
 	return &record, nil
 }
 
+// GetFileUploadRecordByMD5 returns file upload record by 5.
 func (r *uploadRepository) GetFileUploadRecordByMD5(fileMD5 string) (*model.FileUpload, error) {
 	var record model.FileUpload
 	err := r.db.Where("file_md5 = ?", fileMD5).First(&record).Error
@@ -98,6 +99,7 @@ func (r *uploadRepository) GetChunkInfoRecords(fileMD5 string) ([]model.ChunkInf
 	return chunks, err
 }
 
+// GetChunkInfoRecord returns chunk info record.
 func (r *uploadRepository) GetChunkInfoRecord(fileMD5 string, chunkIndex int) (*model.ChunkInfo, error) {
 	var chunk model.ChunkInfo
 	err := r.db.Where("file_md5 = ? AND chunk_index = ?", fileMD5, chunkIndex).First(&chunk).Error
@@ -132,6 +134,7 @@ func (r *uploadRepository) DeleteFileUploadRecord(fileMD5 string, userID uint) e
 	return r.db.Where("file_md5 = ? AND user_id = ?", fileMD5, userID).Delete(&model.FileUpload{}).Error
 }
 
+// DeleteFileUploadRecordByMD5 deletes file upload record by 5.
 func (r *uploadRepository) DeleteFileUploadRecordByMD5(fileMD5 string) error {
 	return r.db.Where("file_md5 = ?", fileMD5).Delete(&model.FileUpload{}).Error
 }
@@ -146,6 +149,7 @@ func (r *uploadRepository) CreateChunkInfoRecord(record *model.ChunkInfo) error 
 	return r.db.Create(record).Error
 }
 
+// UpsertChunkInfoRecord handles upsert chunk info record.
 func (r *uploadRepository) UpsertChunkInfoRecord(record *model.ChunkInfo) error {
 	var existing model.ChunkInfo
 	err := r.db.Where("file_md5 = ? AND chunk_index = ?", record.FileMD5, record.ChunkIndex).First(&existing).Error

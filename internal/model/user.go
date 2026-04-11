@@ -1,3 +1,4 @@
+// Package model contains persistent models and DTOs.
 package model
 
 import "time"
