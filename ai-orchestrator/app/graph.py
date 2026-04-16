@@ -55,6 +55,7 @@ JSON_OBJECT_PATTERN = re.compile(r"\{[\s\S]*\}")
 class RAGState(TypedDict, total=False):
     query: str
     user: dict[str, Any]
+    stream_callback: Any
     conversation_id: str
     history: list[dict[str, Any]]
     intent: str
@@ -90,11 +91,18 @@ def build_graph(settings: Settings, backend: GoBackendClient):
     planner_llm = _build_model(settings.planner, request_timeout=settings.request_timeout_seconds)
     answer_llm = _build_model(settings.llm, request_timeout=settings.request_timeout_seconds)
 
+    def get_optional_stream_writer():
+        try:
+            return get_stream_writer()
+        except RuntimeError:
+            return None
+
     def emit_trace(step: str, **metadata: Any) -> None:
         log_request("graph_step", step=step, **metadata)
         if settings.debug_traces:
-            writer = get_stream_writer()
-            writer(StreamEvent(type="trace", trace=step, metadata=metadata).model_dump(mode="json"))
+            writer = get_optional_stream_writer()
+            if writer is not None:
+                writer(StreamEvent(type="trace", trace=step, metadata=metadata).model_dump(mode="json"))
 
     async def load_history(state: RAGState) -> RAGState:
         start = time.perf_counter()
@@ -110,6 +118,9 @@ def build_graph(settings: Settings, backend: GoBackendClient):
         query = state["query"]
         history = [ChatMessagePayload.model_validate(item) for item in state.get("history", [])]
         fallback = _heuristic_decision(query, history)
+        if _should_use_heuristic_planner(query, history):
+            emit_trace("classify_intent", latency_ms=elapsed_ms(start), intent=fallback.intent, mode="heuristic")
+            return fallback.model_dump(exclude_none=False)
 
         prompt = f"最近历史：\n{_format_history_lines(history)}\n\n当前问题：\n{query}\n"
         try:
@@ -327,14 +338,21 @@ def build_graph(settings: Settings, backend: GoBackendClient):
 
     async def generate_answer(state: RAGState) -> RAGState:
         start = time.perf_counter()
-        writer = get_stream_writer()
+        writer = get_optional_stream_writer()
+        stream_callback = state.get("stream_callback")
         parts: list[str] = []
         async for chunk in answer_llm.astream(state["prompt_messages"]):
             text = _extract_chunk_text(chunk)
             if not text:
                 continue
             parts.append(text)
-            writer(StreamEvent(type="chunk", chunk=text).model_dump(mode="json"))
+            if writer is not None:
+                writer(StreamEvent(type="chunk", chunk=text).model_dump(mode="json"))
+            if callable(stream_callback):
+                try:
+                    stream_callback(text)
+                except Exception:
+                    pass
         answer = "".join(parts).strip()
         emit_trace("generate_answer", latency_ms=elapsed_ms(start), chars=len(answer))
         return {"answer": answer}
@@ -465,6 +483,21 @@ def _heuristic_decision(query: str, history: list[ChatMessagePayload]) -> Planne
         skip_retrieval=skip_retrieval,
         reason="heuristic fallback",
     )
+
+
+def _should_use_heuristic_planner(query: str, history: list[ChatMessagePayload]) -> bool:
+    cleaned = query.strip()
+    if not cleaned:
+        return True
+
+    if len(history) <= 2 and len(cleaned) <= 80:
+        follow_up_tokens = ("继续", "刚才", "上一个", "前面", "这个问题", "它", "那这个")
+        comparison_tokens = ("对比", "比较", "区别", "优缺点")
+        troubleshooting_tokens = ("报错", "异常", "失败", "排查", "问题")
+        if not any(token in cleaned for token in follow_up_tokens + comparison_tokens + troubleshooting_tokens):
+            return True
+
+    return False
 
 
 def _sanitize_query(query: str) -> str:

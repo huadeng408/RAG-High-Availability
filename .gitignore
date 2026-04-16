@@ -4,6 +4,9 @@
 /.gocache
 /.gomodcache
 /.venv-reranker
+/.venv-local-ai
+/.venv-local-ai-cpython
+/bin
 /ai-orchestrator/.venv
 /CLAUDE.md
 /text.py

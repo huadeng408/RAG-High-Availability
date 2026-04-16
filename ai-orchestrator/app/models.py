@@ -197,8 +197,8 @@ class ParseResponsePayload(BaseModel):
 class ChunkRequestPayload(BaseModel):
     task: FileProcessingTaskPayload
     text: str
-    chunkSize: int = 1000
-    chunkOverlap: int = 100
+    chunkSize: int = 500
+    chunkOverlap: int = 50
 
 
 class ChunkResponsePayload(BaseModel):

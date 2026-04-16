@@ -61,15 +61,13 @@ func NewClient(cfg config.AIOrchestratorConfig) Client {
 	if !cfg.Enabled || strings.TrimSpace(cfg.BaseURL) == "" {
 		return noopClient{}
 	}
-	timeout := time.Duration(cfg.TimeoutMs) * time.Millisecond
-	if timeout <= 0 {
-		timeout = 90 * time.Second
-	}
 	return &httpClient{
 		cfg: cfg,
-		client: &http.Client{
-			Timeout: timeout,
-		},
+		// Streaming chat can legitimately run for several minutes when retrieval,
+		// rerank, or downstream model calls are slow. Avoid a fixed client-wide
+		// timeout and let the request context / websocket cancellation control the
+		// lifecycle instead.
+		client: &http.Client{},
 	}
 }
 

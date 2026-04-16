@@ -55,12 +55,12 @@ embedding:
   model: "BAAI/bge-small-zh-v1.5"
   api_key: ""
   base_url: "http://embedding:8009"
-  dimensions: 2048
+  dimensions: 512
 
 llm:
   base_url: "https://api.deepseek.com/v1"
   model: "deepseek-chat"
-  api_key: "sk-eb5f204730714958aabbb2796094fcc9"
+  api_key: "${PAISMART_LLM_API_KEY}"
   prompt:
     rules: |
       你是企业知识库问答助手。

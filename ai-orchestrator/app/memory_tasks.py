@@ -137,7 +137,28 @@ def _parse_json_response(raw: str, model_cls):
         match = JSON_OBJECT_PATTERN.search(trimmed)
         if not match:
             raise
-        return model_cls.model_validate(json.loads(match.group(0)))
+        payload = json.loads(match.group(0))
+        if isinstance(payload, dict):
+            payload = _sanitize_null_fields(payload)
+        return model_cls.model_validate(payload)
+
+
+def _sanitize_null_fields(payload: dict[str, object]) -> dict[str, object]:
+    normalized = dict(payload)
+    defaults: dict[str, object] = {
+        "summary": "",
+        "facts": [],
+        "entities": [],
+        "profile_updates": [],
+        "memory_type": "fact",
+        "content": "",
+        "importance": 0.0,
+        "should_store": False,
+    }
+    for key, default in defaults.items():
+        if normalized.get(key) is None:
+            normalized[key] = default
+    return normalized
 
 
 def _normalize_string_list(items: list[str]) -> list[str]:

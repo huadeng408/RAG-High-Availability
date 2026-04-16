@@ -1,12 +1,12 @@
-﻿server:
+server:
   port: "8081"
-  mode: "debug" # debug, release, test
+  mode: "debug"
 
 database:
   mysql:
     dsn: "root:PaiSmart2025@tcp(127.0.0.1:3307)/PaiSmart?charset=utf8mb4&parseTime=True&loc=Local"
   redis:
-    addr: "127.0.0.1:6380"
+    addr: "127.0.0.1:6381"
     password: "PaiSmart2025"
     db: 0
 
@@ -16,14 +16,14 @@ jwt:
   refresh_token_expire_days: 7
 
 log:
-  level: "debug" # debug, info, warn, error
-  format: "json" # json, console
+  level: "debug"
+  format: "json"
   output_path: "./logs"
 
 kafka:
   brokers: "127.0.0.1:9092"
   topic: "file-parse"
-  consumer_group_prefix: "paismart-go"
+  consumer_group_prefix: "paismart-go-devstable"
   max_retries: 3
   base_backoff_ms: 800
   embedding_batch_size: 8
@@ -34,9 +34,9 @@ kafka:
     embed: "file-embed"
     index: "file-index"
     dlq: "file-dlq"
-# MinIO 对象存储配置
+
 minio:
-  endpoint: "127.0.0.1:9000" # 本地开发环境使用 127.0.0.1:9000
+  endpoint: "127.0.0.1:9000"
   access_key_id: "minioadmin"
   secret_access_key: "minioadmin"
   use_ssl: false
@@ -49,19 +49,17 @@ elasticsearch:
   addresses: "http://127.0.0.1:9200"
   username: ""
   password: ""
-  index_name: "knowledge_base"
+  index_name: "knowledge_base_dev_stable"
 
-# Embedding model config
 embedding:
   model: "BAAI/bge-small-zh-v1.5"
   api_key: ""
-  base_url: "http://127.0.0.1:8009"
+  base_url: "http://127.0.0.1:18009"
   dimensions: 512
 
-# LLM config
 llm:
   base_url: "https://api.deepseek.com/v1"
-  model: deepseek-chat
+  model: "deepseek-chat"
   api_key: "${PAISMART_LLM_API_KEY}"
   prompt:
     rules: |
@@ -87,17 +85,17 @@ retrieval:
   rrf_k: 60
   rerank_topn: 100
   final_topk: 5
-  rerank_timeout_ms: 120
+  rerank_timeout_ms: 200
 
 reranker:
   enabled: true
-  base_url: "http://127.0.0.1:8008"
+  base_url: "http://127.0.0.1:18008"
   api_key: ""
-  model: "jinaai/jina-reranker-v2-base-multilingual"
+  model: "BAAI/bge-reranker-base"
 
 memory:
   enabled: true
-  memory_index_name: "conversation_memory"
+  memory_index_name: "conversation_memory_dev_stable"
   sensory_max_messages: 6
   sensory_max_tokens: 800
   working_trigger_messages: 8
@@ -113,6 +111,6 @@ ai:
     enabled: true
     ingestion_enabled: true
     base_url: "http://127.0.0.1:8090"
-    timeout_ms: 120000
-    ingestion_timeout_ms: 180000
+    timeout_ms: 300000
+    ingestion_timeout_ms: 300000
     shared_secret: "paismart-internal-dev"

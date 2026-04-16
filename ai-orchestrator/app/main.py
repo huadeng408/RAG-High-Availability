@@ -104,18 +104,41 @@ async def healthz() -> dict[str, str]:
 @app.post("/v1/chat/stream")
 async def chat_stream(payload: ChatStreamRequest, request: Request, _: None = Depends(verify_internal_token)):
     async def event_stream():
+        run_task: asyncio.Task | None = None
         try:
+            queue: asyncio.Queue[str] = asyncio.Queue()
+
+            def on_chunk(text: str) -> None:
+                if text:
+                    queue.put_nowait(text)
+
             initial_state = {
                 "query": payload.query,
                 "user": payload.user.model_dump(mode="json"),
+                "stream_callback": on_chunk,
             }
-            async for event in graph.astream(initial_state, stream_mode="custom"):
+
+            run_task = asyncio.create_task(graph.ainvoke(initial_state))
+            while True:
                 if await request.is_disconnected():
+                    run_task.cancel()
                     break
-                yield json.dumps(event, ensure_ascii=False) + "\n"
+                if run_task.done() and queue.empty():
+                    break
+                try:
+                    chunk = await asyncio.wait_for(queue.get(), timeout=0.25)
+                except asyncio.TimeoutError:
+                    continue
+                yield json.dumps(StreamEvent(type="chunk", chunk=chunk).model_dump(mode="json"), ensure_ascii=False) + "\n"
+            if run_task is not None:
+                await run_task
         except asyncio.CancelledError:
+            if run_task is not None:
+                run_task.cancel()
             return
         except Exception as exc:
+            if run_task is not None:
+                run_task.cancel()
             error_event = StreamEvent(type="error", error=str(exc))
             yield json.dumps(error_event.model_dump(mode="json"), ensure_ascii=False) + "\n"
             return

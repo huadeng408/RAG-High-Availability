@@ -175,7 +175,7 @@ services:
     environment:
       EMBEDDING_MODEL: "BAAI/bge-small-zh-v1.5"
       EMBEDDING_THREADS: "2"
-      EMBEDDING_OUTPUT_DIMENSIONS: "2048"
+      EMBEDDING_OUTPUT_DIMENSIONS: "512"
     volumes:
       - embedding-cache:/root/.cache
 

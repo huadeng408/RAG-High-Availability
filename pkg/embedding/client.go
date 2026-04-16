@@ -209,6 +209,12 @@ func isDimensionsUnsupported(err error) bool {
 	if strings.Contains(msg, "invalid_parameter") && strings.Contains(msg, "dimensions") {
 		return true
 	}
+	if strings.Contains(msg, "requested dimensions") && strings.Contains(msg, "model outputs") {
+		return true
+	}
+	if strings.Contains(msg, "dimension mismatch") {
+		return true
+	}
 	return false
 }
 

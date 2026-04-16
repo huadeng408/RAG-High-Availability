@@ -13,6 +13,7 @@ import (
 	"mime/multipart"
 	"sort"
 	"strings"
+	"time"
 
 	"pai-smart-go/internal/config"
 	"pai-smart-go/internal/model"
@@ -99,6 +100,15 @@ func (s *uploadService) UploadChunk(ctx context.Context, fileMD5, fileName strin
 		}
 	}
 
+	chunkBytes, err := io.ReadAll(file)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to read chunk: %w", err)
+	}
+	actualChunkMD5 := calculateMD5Hex(chunkBytes)
+	if actualChunkMD5 != chunkMD5 {
+		return nil, 0, fmt.Errorf("chunk md5 mismatch: expect=%s actual=%s", chunkMD5, actualChunkMD5)
+	}
+
 	record, err := s.uploadRepo.GetFileUploadRecord(fileMD5, userID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		if orgTag == "" {
@@ -133,13 +143,6 @@ func (s *uploadService) UploadChunk(ctx context.Context, fileMD5, fileName strin
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to check chunk status from redis: %w", err)
 	}
-	if isUploaded {
-		uploaded, err := s.getUploadedChunks(ctx, fileMD5, userID, totalChunks)
-		if err != nil {
-			return nil, 0, err
-		}
-		return uploaded, totalChunks, nil
-	}
 	// Redis is an acceleration layer. If it misses, check DB chunk metadata to keep idempotency.
 	chunkRecord, err := s.uploadRepo.GetChunkInfoRecord(fileMD5, chunkIndex)
 	if err == nil {
@@ -147,26 +150,25 @@ func (s *uploadService) UploadChunk(ctx context.Context, fileMD5, fileName strin
 		if dbChunkMD5 != chunkMD5 {
 			return nil, 0, fmt.Errorf("chunk md5 conflict at index=%d: existing=%s request=%s", chunkIndex, dbChunkMD5, chunkMD5)
 		}
-		if markErr := s.uploadRepo.MarkChunkUploaded(ctx, fileMD5, userID, chunkIndex); markErr != nil {
-			return nil, 0, markErr
+		objectName := s.resolveChunkObjectName(chunkRecord.StoragePath, fileMD5, chunkIndex)
+		if healthy, healthyErr := s.isChunkObjectReusable(ctx, objectName, chunkMD5); healthyErr != nil {
+			return nil, 0, healthyErr
+		} else if healthy {
+			if !isUploaded {
+				if markErr := s.uploadRepo.MarkChunkUploaded(ctx, fileMD5, userID, chunkIndex); markErr != nil {
+					return nil, 0, markErr
+				}
+			}
+			uploaded, upErr := s.getUploadedChunks(ctx, fileMD5, userID, totalChunks)
+			if upErr != nil {
+				return nil, 0, upErr
+			}
+			return uploaded, totalChunks, nil
 		}
-		uploaded, upErr := s.getUploadedChunks(ctx, fileMD5, userID, totalChunks)
-		if upErr != nil {
-			return nil, 0, upErr
-		}
-		return uploaded, totalChunks, nil
+		log.Warnf("[UploadService] stale chunk metadata detected, re-upload fileMD5=%s chunkIndex=%d object=%s", fileMD5, chunkIndex, objectName)
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, 0, err
-	}
-
-	chunkBytes, err := io.ReadAll(file)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to read chunk: %w", err)
-	}
-	actualChunkMD5 := calculateMD5Hex(chunkBytes)
-	if actualChunkMD5 != chunkMD5 {
-		return nil, 0, fmt.Errorf("chunk md5 mismatch: expect=%s actual=%s", chunkMD5, actualChunkMD5)
 	}
 
 	objectName := fmt.Sprintf("chunks/%s/%d", fileMD5, chunkIndex)
@@ -216,18 +218,23 @@ func (s *uploadService) MergeChunks(ctx context.Context, fileMD5, fileName strin
 	if err := s.verifyAllChunkIntegrity(ctx, fileMD5, totalChunks); err != nil {
 		return "", err
 	}
+	chunkRecords, err := s.uploadRepo.GetChunkInfoRecords(fileMD5)
+	if err != nil {
+		return "", fmt.Errorf("failed to query chunk records for merge: %w", err)
+	}
 
 	destObjectName := objectpath.MergedObjectName(fileMD5, fileName)
 	if totalChunks == 1 {
-		src := minio.CopySrcOptions{Bucket: s.minioCfg.BucketName, Object: fmt.Sprintf("chunks/%s/0", fileMD5)}
+		srcObjectName := s.resolveChunkObjectName(chunkRecords[0].StoragePath, fileMD5, 0)
+		src := minio.CopySrcOptions{Bucket: s.minioCfg.BucketName, Object: srcObjectName}
 		dst := minio.CopyDestOptions{Bucket: s.minioCfg.BucketName, Object: destObjectName}
 		if _, err := storage.MinioClient.CopyObject(context.Background(), dst, src); err != nil {
 			return "", fmt.Errorf("failed to copy single chunk object: %w", err)
 		}
 	} else {
 		srcs := make([]minio.CopySrcOptions, 0, totalChunks)
-		for i := 0; i < totalChunks; i++ {
-			srcs = append(srcs, minio.CopySrcOptions{Bucket: s.minioCfg.BucketName, Object: fmt.Sprintf("chunks/%s/%d", fileMD5, i)})
+		for i, record := range chunkRecords {
+			srcs = append(srcs, minio.CopySrcOptions{Bucket: s.minioCfg.BucketName, Object: s.resolveChunkObjectName(record.StoragePath, fileMD5, i)})
 		}
 		dst := minio.CopyDestOptions{Bucket: s.minioCfg.BucketName, Object: destObjectName}
 		if _, err := storage.MinioClient.ComposeObject(context.Background(), dst, srcs...); err != nil {
@@ -239,7 +246,10 @@ func (s *uploadService) MergeChunks(ctx context.Context, fileMD5, fileName strin
 		return "", err
 	}
 
-	objectURL, _ := storage.GetPresignedURL(s.minioCfg.BucketName, destObjectName, 60*60)
+	objectURL, err := storage.GetPresignedURL(s.minioCfg.BucketName, destObjectName, time.Hour)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate merged object url: %w", err)
+	}
 	task := tasks.FileProcessingTask{
 		FileMD5:   fileMD5,
 		ObjectURL: objectURL,
@@ -257,15 +267,6 @@ func (s *uploadService) MergeChunks(ctx context.Context, fileMD5, fileName strin
 		bgCtx := context.Background()
 		if err := s.uploadRepo.DeleteUploadMark(bgCtx, fileMD5, userID); err != nil {
 			log.Warnf("[MergeChunks] failed to clear redis upload mark, fileMD5=%s err=%v", fileMD5, err)
-		}
-		objectsCh := make(chan minio.ObjectInfo)
-		go func() {
-			defer close(objectsCh)
-			for i := 0; i < totalChunks; i++ {
-				objectsCh <- minio.ObjectInfo{Key: fmt.Sprintf("chunks/%s/%d", fileMD5, i)}
-			}
-		}()
-		for range storage.MinioClient.RemoveObjects(bgCtx, s.minioCfg.BucketName, objectsCh, minio.RemoveObjectsOptions{}) {
 		}
 	}()
 
@@ -384,15 +385,50 @@ func (s *uploadService) verifyAllChunkIntegrity(ctx context.Context, fileMD5 str
 		if strings.TrimSpace(record.ChunkMD5) == "" {
 			return fmt.Errorf("empty chunk md5 for chunk index %d", i)
 		}
-		objectName := strings.TrimSpace(record.StoragePath)
-		if objectName == "" {
-			objectName = fmt.Sprintf("chunks/%s/%d", fileMD5, i)
-		}
+		objectName := s.resolveChunkObjectName(record.StoragePath, fileMD5, i)
 		if err := s.verifyChunkObjectMD5(ctx, objectName, record.ChunkMD5); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// resolveChunkObjectName returns the persisted chunk object path or the default path for legacy rows.
+func (s *uploadService) resolveChunkObjectName(storagePath, fileMD5 string, chunkIndex int) string {
+	objectName := strings.TrimSpace(storagePath)
+	if objectName != "" {
+		return objectName
+	}
+	return fmt.Sprintf("chunks/%s/%d", fileMD5, chunkIndex)
+}
+
+// isChunkObjectReusable checks whether an existing chunk object still exists and matches the requested md5.
+func (s *uploadService) isChunkObjectReusable(ctx context.Context, objectName, expectedMD5 string) (bool, error) {
+	if _, err := storage.MinioClient.StatObject(ctx, s.minioCfg.BucketName, objectName, minio.StatObjectOptions{}); err != nil {
+		if isObjectNotFoundError(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to stat chunk object %s: %w", objectName, err)
+	}
+	if err := s.verifyChunkObjectMD5(ctx, objectName, expectedMD5); err != nil {
+		if isObjectNotFoundError(err) {
+			return false, nil
+		}
+		log.Warnf("[UploadService] chunk object integrity check failed, object=%s err=%v", objectName, err)
+		return false, nil
+	}
+	return true, nil
+}
+
+func isObjectNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "does not exist") ||
+		strings.Contains(msg, "not found") ||
+		strings.Contains(msg, "no such key") ||
+		strings.Contains(msg, "specified key does not exist")
 }
 
 // getUploadedChunks returns uploaded chunks.

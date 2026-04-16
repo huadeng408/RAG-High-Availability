@@ -91,7 +91,7 @@ def load_settings() -> Settings:
         llm=llm,
         planner=planner,
         embedding=embedding,
-        embedding_dimensions=_get_int("PAISMART_EMBEDDING_DIMENSIONS", 2048),
+        embedding_dimensions=_get_int("PAISMART_EMBEDDING_DIMENSIONS", 512),
         tika_url=os.getenv("PAISMART_TIKA_URL", "http://127.0.0.1:9998").strip(),
         es_url=os.getenv("PAISMART_ES_URL", "http://127.0.0.1:9200").strip(),
         es_username=os.getenv("PAISMART_ES_USERNAME", "").strip(),
