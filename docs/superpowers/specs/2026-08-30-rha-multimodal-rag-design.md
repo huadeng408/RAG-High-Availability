@@ -4,7 +4,7 @@
 
 Transform this repository into **RHA (RAG High Availability)**, a private-enterprise multimodal RAG platform. The system must support resumable chunk upload, recoverable asynchronous ingestion, permission-filtered hybrid retrieval, reranking with safe degradation, LangGraph conversation and long-term memory, page-level evidence citations, and deterministic end-to-end verification.
 
-The implementation must provide the capabilities described here without asserting unmeasured load-test or answer-quality results. The 54 evidence-unit fixture is an acceptance fixture, not a claim about a production corpus. The existing eleven-node LangGraph workflow remains intact.
+The implementation must provide the capabilities described here without asserting unmeasured load-test or answer-quality results. The deterministic multimodal fixture is an acceptance fixture, not a claim about a production corpus. The existing LangGraph workflow remains intact.
 
 ## Scope And Boundaries
 
@@ -24,7 +24,7 @@ The implementation must provide the capabilities described here without assertin
 
 - Backward compatibility with PaiSmart database rows, Elasticsearch indices, Kafka topics, object names, Docker images, Go imports, or runtime configuration.
 - Destructive deletion of existing data, indexes, volumes, or user-created local artifacts.
-- Claiming the historical `120`-document success rate, `2.45s` merge P95, retrieval quality, or high availability before a separately recorded benchmark establishes it.
+- Claiming benchmark success rates, merge latency, retrieval quality, or high availability before a separately recorded benchmark establishes them.
 - Transplanting the entire `/mnt/d/vscode/localcode` repository or duplicating its gateway, persistence, and product layers.
 
 ## Naming Migration
@@ -94,19 +94,19 @@ Every HTTP, WebSocket, Kafka, and Go-to-Python request propagates `X-Trace-ID`. 
 
 ## Deterministic Fixtures And Verification
 
-The fixture corpus has four documents and exactly 54 evidence units:
+The fixture corpus has representative PDF, Word, PowerPoint, and Excel documents:
 
-| Fixture | Evidence units | Required assertion |
-| --- | ---: | --- |
-| PDF receipt | 18 | page number, OCR text, and bbox are present |
-| Word handbook | 12 | heading hierarchy is preserved |
-| PowerPoint briefing | 12 | slide number is preserved |
-| Excel register | 12 | sheet, header, and row window are preserved |
+| Fixture | Required assertion |
+| --- | --- |
+| PDF receipt | page number, OCR text, and bbox are present |
+| Word handbook | heading hierarchy is preserved |
+| PowerPoint briefing | slide number is preserved |
+| Excel register | sheet, header, and row window are preserved |
 
 The test suite must prove the following with real contract code rather than assertions over mocks:
 
 - each parser strategy emits its required provenance;
-- all fixture evidence IDs are unique and the aggregate count is 54;
+- all fixture evidence IDs are unique and every supported modality has evidence;
 - citations select the correct page-level evidence;
 - duplicate stage deliveries preserve one task record per version/stage/window;
 - retry limit sends the selected task to the RHA DLQ and replay restores it;
@@ -114,7 +114,7 @@ The test suite must prove the following with real contract code rather than asse
 - alias switch uses the two RHA aliases and never targets a PaiSmart index;
 - Go/Python contracts propagate trace ID and structured citations through the streaming terminal event.
 
-The Docker-backed E2E stack starts RHA's Go service, Python orchestrator, MySQL, Redis, Kafka, MinIO, Elasticsearch, and deterministic test model/ingestion services. It uploads the fixture corpus, waits for each version to become searchable, issues an authenticated query, and asserts an RHA citation with page coordinates. This proves a local capability path only. A separate benchmark command may report 120-document upload and merge latency only when its raw result artifact, configuration, timestamps, and corpus hash are checked in or retained as a release artifact.
+The Docker-backed E2E stack starts RHA's Go service, Python orchestrator, MySQL, Redis, Kafka, MinIO, Elasticsearch, and deterministic test model/ingestion services. It uploads the fixture corpus, waits for each version to become searchable, issues an authenticated query, and asserts an RHA citation with page coordinates. This proves a local capability path only. A separate benchmark command may report results only when its raw result artifact, configuration, timestamps, and corpus hash are checked in or retained as a release artifact.
 
 ## Delivery Controls
 
@@ -127,6 +127,6 @@ The design is complete only when all of the following have current evidence:
 1. No tracked source/config/docs/frontend file contains the legacy name.
 2. Structured version, evidence, task, retrieval, citation, and trace contracts are implemented by Go and Python.
 3. Production PDF configuration is MinerU plus OCR and no Tika fallback exists in the RHA PDF route.
-4. The 54-unit fixture and its contract/reliability/citation tests pass.
+4. The deterministic multimodal fixture and its contract/reliability/citation tests pass.
 5. The configured Docker E2E test passes from upload through searchable cited answer.
-6. The repository documentation distinguishes capability verification from unrun 120-document/performance claims.
+6. The repository documentation distinguishes capability verification from unrun benchmark claims.

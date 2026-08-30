@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deliver an RHA-branded, versioned multimodal RAG pipeline with page-level citations, recoverable Kafka processing, observable degradation, deterministic fixtures, and Docker E2E evidence.
+**Goal:** Deliver an RHA-branded, versioned multimodal RAG pipeline with page-level citations, recoverable Kafka processing, observable degradation, deterministic multimodal fixtures, and Docker E2E evidence.
 
-**Architecture:** Keep the existing Go gateway, Kafka coordination, retrieval service, WebSocket transport, and 11-node LangGraph graph. Replace the flat `file_md5`/text-only ingestion boundary with versioned structured contracts shared by Go and Python; persist provenance and evidence separately from text chunks, index through RHA aliases, and return citations in the existing stream terminal event.
+**Architecture:** Keep the existing Go gateway, Kafka coordination, retrieval service, WebSocket transport, and LangGraph graph. Replace the flat `file_md5`/text-only ingestion boundary with versioned structured contracts shared by Go and Python; persist provenance and evidence separately from text chunks, index through RHA aliases, and return citations in the existing stream terminal event.
 
 **Tech Stack:** Go, Gin, GORM, MySQL, Redis, Kafka, Elasticsearch, MinIO, Python, FastAPI, Pydantic, LangGraph, OpenTelemetry, Docker Compose, standard Go tests, and Python `unittest`.
 
@@ -15,9 +15,9 @@
 - The tracked repository contains no contiguous legacy product name after Task 1. Test scripts construct the legacy search token from fragments so the script is not a false positive.
 - Preserve existing uncommitted user changes; stage only files that belong to the active task.
 - Do not retain Tika as a PDF fallback. Production PDF parsing fails into retry/DLQ when MinerU plus OCR is unavailable.
-- The existing LangGraph workflow remains 11 nodes.
+- Preserve the existing LangGraph workflow; the number of nodes is not an acceptance criterion.
 - `file_md5` remains an upload checksum only; pipeline uniqueness is `(document_version, stage, window_id)`.
-- The deterministic corpus has exactly 54 evidence units and is never described as a 120-document or performance benchmark.
+- The deterministic corpus covers PDF, Word, PowerPoint, and Excel with unique evidence units and is never described as a performance benchmark.
 - No tracked secret is added. Environment variables carry credentials and model endpoints.
 - Every task follows red-green-refactor and is committed and pushed to `origin/main` only after the listed verification succeeds.
 
@@ -77,7 +77,7 @@ git push origin main
 
 Stage only modified tracked source files, not generated artifacts or unrelated pre-existing changes.
 
-### Task 2: Define Versioned Go Contracts And the 54-Unit Fixture
+### Task 2: Define Versioned Go Contracts And the Deterministic Multimodal Fixture
 
 **Files:**
 - Create: `internal/model/document_contract.go`
@@ -111,7 +111,7 @@ func TestCitationUsesPageAndBoundingBox(t *testing.T) {
 }
 ```
 
-The Python verifier loads `testdata/rha_multimodal_fixture.json`, asserts exactly four sources, exactly 54 unique `evidence_id` values, and the counts `18, 12, 12, 12` by modality.
+The Python verifier loads `testdata/rha_multimodal_fixture.json`, asserts PDF, Word, PowerPoint, and Excel sources are each present, and verifies every `evidence_id` is unique with the modality-specific location required by the design.
 
 - [ ] **Step 2: Run the red tests.**
 
@@ -133,7 +133,7 @@ Populate the fixture with deterministic text and locations for PDF, Word, PPT, a
 
 Run: `go test ./internal/model && python3 scripts/verify_rha_fixture.py`
 
-Expected: both pass and the verifier prints `54 evidence units`.
+Expected: both pass and the verifier reports all supported modalities with unique evidence units.
 
 - [ ] **Step 5: Commit and push the contract foundation.**
 
@@ -472,19 +472,19 @@ Expected: fails because no RHA E2E report exists.
 
 - [ ] **Step 3: Implement deterministic services and orchestration.**
 
-The model stub exposes deterministic OpenAI-compatible embedding and chat responses. The fixture-only ingestion mode serves the committed 54-unit corpus. `run_rha_e2e.sh` starts Docker Desktop in the background only if unavailable, waits on explicit health checks, runs upload-to-searchable and cited-query actions, writes the report, runs the Python verifier, then stops only the named E2E Compose project. It never deletes volumes or unrelated containers.
+The model stub exposes deterministic OpenAI-compatible embedding and chat responses. The fixture-only ingestion mode serves the committed multimodal corpus. `run_rha_e2e.sh` starts Docker Desktop in the background only if unavailable, waits on explicit health checks, runs upload-to-searchable and cited-query actions, writes the report, runs the Python verifier, then stops only the named E2E Compose project. It never deletes volumes or unrelated containers.
 
 - [ ] **Step 4: Run the full E2E verification.**
 
 Run: `bash scripts/run_rha_e2e.sh`
 
-Expected: all named services report healthy; report includes four uploaded fixture versions, 54 evidence units, an active RHA index alias, a propagated trace ID, and a page-level citation.
+Expected: all named services report healthy; report includes uploaded fixture versions for each supported modality, an active RHA index alias, a propagated trace ID, and a page-level citation.
 
 - [ ] **Step 5: Run the release gates.**
 
 Run: `bash scripts/verify_rha_naming.sh && python3 scripts/verify_rha_fixture.py && go test ./... && cd ai-orchestrator && python -m unittest discover -s tests -v`
 
-Expected: every command exits `0`; no historical 120-document or latency claim appears in documentation without an attached benchmark artifact.
+Expected: every command exits `0`; no benchmark claim appears in documentation without an attached benchmark artifact.
 
 - [ ] **Step 6: Commit and push the verified E2E release.**
 
