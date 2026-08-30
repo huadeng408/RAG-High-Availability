@@ -77,6 +77,42 @@ CREATE TABLE document_vectors (
     is_public TINYINT(1) NOT NULL DEFAULT 0
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE document_versions (
+    document_version VARCHAR(96) PRIMARY KEY,
+    source_id VARCHAR(96) NOT NULL,
+    content_sha256 CHAR(64) NOT NULL,
+    parser_name VARCHAR(128) NOT NULL,
+    parser_version VARCHAR(64) NOT NULL,
+    source_metadata JSON,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_document_versions_source_hash (source_id, content_sha256),
+    INDEX idx_document_versions_source (source_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE evidence_units (
+    evidence_id VARCHAR(128) PRIMARY KEY,
+    document_version VARCHAR(96) NOT NULL,
+    modality VARCHAR(32) NOT NULL,
+    element_type VARCHAR(64) NOT NULL,
+    page_number INT NULL,
+    slide_number INT NULL,
+    sheet_name VARCHAR(255) NULL,
+    row_start INT NULL,
+    row_end INT NULL,
+    bbox JSON NULL,
+    text_content TEXT NOT NULL,
+    parser_name VARCHAR(128) NOT NULL,
+    parser_version VARCHAR(64) NOT NULL,
+    asset_path VARCHAR(512) NULL,
+    owner_id VARCHAR(64) NULL,
+    org_tag VARCHAR(50) NULL,
+    is_public TINYINT(1) NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_evidence_version FOREIGN KEY (document_version) REFERENCES document_versions(document_version),
+    INDEX idx_evidence_document_version (document_version),
+    INDEX idx_evidence_access (owner_id, org_tag, is_public)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE working_memory_snapshots (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     user_id BIGINT NOT NULL,

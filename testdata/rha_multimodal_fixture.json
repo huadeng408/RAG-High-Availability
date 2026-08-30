@@ -1,0 +1,125 @@
+{
+  "fixtureVersion": "rha-fixture-v1",
+  "documents": [
+    {
+      "sourceId": "fixture-pdf",
+      "fileName": "payment-receipt.pdf",
+      "mediaType": "application/pdf",
+      "modality": "pdf",
+      "documentVersion": "fixture-pdf-v1",
+      "parser": {"name": "fixture-mineru-ocr", "version": "1"},
+      "evidenceUnits": [
+        {
+          "evidenceId": "pdf-page-2-terms",
+          "documentVersion": "fixture-pdf-v1",
+          "modality": "pdf",
+          "elementType": "ocr_text",
+          "page": 2,
+          "bbox": {"x0": 48.0, "y0": 112.0, "x1": 470.0, "y1": 146.0},
+          "text": "Payment terms are net 30 days.",
+          "assetPath": "fixtures/payment-receipt.pdf"
+        },
+        {
+          "evidenceId": "pdf-page-3-contact",
+          "documentVersion": "fixture-pdf-v1",
+          "modality": "pdf",
+          "elementType": "ocr_text",
+          "page": 3,
+          "bbox": {"x0": 48.0, "y0": 88.0, "x1": 420.0, "y1": 119.0},
+          "text": "Escalations go to the finance desk.",
+          "assetPath": "fixtures/payment-receipt.pdf"
+        }
+      ]
+    },
+    {
+      "sourceId": "fixture-word",
+      "fileName": "incident-handbook.docx",
+      "mediaType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "modality": "word",
+      "documentVersion": "fixture-word-v1",
+      "parser": {"name": "fixture-word", "version": "1"},
+      "evidenceUnits": [
+        {
+          "evidenceId": "word-escalation",
+          "documentVersion": "fixture-word-v1",
+          "modality": "word",
+          "elementType": "paragraph",
+          "headingPath": ["Incident Response", "Escalation"],
+          "text": "Page the on-call engineer for a critical incident.",
+          "assetPath": "fixtures/incident-handbook.docx"
+        },
+        {
+          "evidenceId": "word-review",
+          "documentVersion": "fixture-word-v1",
+          "modality": "word",
+          "elementType": "paragraph",
+          "headingPath": ["Incident Response", "Follow-up"],
+          "text": "Record the incident review within five business days.",
+          "assetPath": "fixtures/incident-handbook.docx"
+        }
+      ]
+    },
+    {
+      "sourceId": "fixture-ppt",
+      "fileName": "security-briefing.pptx",
+      "mediaType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "modality": "ppt",
+      "documentVersion": "fixture-ppt-v1",
+      "parser": {"name": "fixture-ppt", "version": "1"},
+      "evidenceUnits": [
+        {
+          "evidenceId": "ppt-slide-1-control",
+          "documentVersion": "fixture-ppt-v1",
+          "modality": "ppt",
+          "elementType": "slide_text",
+          "slide": 1,
+          "text": "Least privilege limits data access.",
+          "assetPath": "fixtures/security-briefing.pptx"
+        },
+        {
+          "evidenceId": "ppt-slide-2-audit",
+          "documentVersion": "fixture-ppt-v1",
+          "modality": "ppt",
+          "elementType": "slide_text",
+          "slide": 2,
+          "text": "Audit access changes each quarter.",
+          "assetPath": "fixtures/security-briefing.pptx"
+        }
+      ]
+    },
+    {
+      "sourceId": "fixture-excel",
+      "fileName": "service-register.xlsx",
+      "mediaType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "modality": "excel",
+      "documentVersion": "fixture-excel-v1",
+      "parser": {"name": "fixture-excel", "version": "1"},
+      "evidenceUnits": [
+        {
+          "evidenceId": "excel-services-2-3",
+          "documentVersion": "fixture-excel-v1",
+          "modality": "excel",
+          "elementType": "table_window",
+          "sheet": "Services",
+          "header": ["Service", "Owner", "Tier"],
+          "rowStart": 2,
+          "rowEnd": 3,
+          "text": "Billing API, Finance Platform, Tier 1.",
+          "assetPath": "fixtures/service-register.xlsx"
+        },
+        {
+          "evidenceId": "excel-services-4-5",
+          "documentVersion": "fixture-excel-v1",
+          "modality": "excel",
+          "elementType": "table_window",
+          "sheet": "Services",
+          "header": ["Service", "Owner", "Tier"],
+          "rowStart": 4,
+          "rowEnd": 5,
+          "text": "Support Portal, Customer Operations, Tier 2.",
+          "assetPath": "fixtures/service-register.xlsx"
+        }
+      ]
+    }
+  ]
+}
