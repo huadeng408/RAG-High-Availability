@@ -25,7 +25,7 @@ from .models import (
     StreamEvent,
     build_done_event,
 )
-from .trace import configure_logging, current_trace_id, elapsed_ms, log_request, reset_trace_id, set_trace_id
+from .trace import configure_logging, current_trace_id, elapsed_ms, log_request, reset_trace_id, set_trace_id, start_span
 
 
 def _load_env_file() -> None:
@@ -57,7 +57,8 @@ async def trace_middleware(request: Request, call_next):
     token = set_trace_id(request.headers.get("X-Trace-ID", ""))
     trace_id = current_trace_id()
     try:
-        response = await call_next(request)
+        with start_span("http." + request.method.lower(), path=request.url.path):
+            response = await call_next(request)
     except Exception:
         log_request(
             "http_request_error",

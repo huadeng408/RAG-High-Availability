@@ -66,6 +66,8 @@ func main() {
 	}
 	if err := database.DB.AutoMigrate(
 		&model.PipelineTask{},
+		&model.DocumentVersion{},
+		&model.DocumentVector{},
 		&model.WorkingMemorySnapshot{},
 		&model.UserProfileSlot{},
 		&model.LongTermMemory{},
@@ -92,6 +94,8 @@ func main() {
 	uploadRepo := repository.NewUploadRepository(database.DB, database.RDB)
 	conversationRepo := repository.NewConversationRepository(database.RDB)
 	docVectorRepo := repository.NewDocumentVectorRepository(database.DB)
+	documentVersionRepo := repository.NewDocumentVersionRepository(database.DB)
+	evidenceRepo := repository.NewEvidenceRepository(database.DB)
 	pipelineTaskRepo := repository.NewPipelineTaskRepository(database.DB)
 	memoryRepo := repository.NewMemoryRepository(database.DB)
 
@@ -106,7 +110,7 @@ func main() {
 	userService := service.NewUserService(userRepository, orgTagRepo, jwtManager)
 	adminService := service.NewAdminService(orgTagRepo, userRepository, conversationRepo, pipelineTaskRepo, uploadRepo)
 	uploadService := service.NewUploadService(uploadRepo, userRepository, cfg.MinIO)
-	documentService := service.NewDocumentService(uploadRepo, userRepository, orgTagRepo, cfg.MinIO, tikaClient)
+	documentService := service.NewDocumentService(uploadRepo, userRepository, orgTagRepo, docVectorRepo, pipelineTaskRepo, cfg.MinIO, cfg.Elasticsearch.IndexName, tikaClient)
 	searchService := service.NewSearchService(
 		embeddingClient,
 		rerankerClient,
@@ -130,6 +134,8 @@ func main() {
 		cfg.Kafka,
 		uploadRepo,
 		docVectorRepo,
+		documentVersionRepo,
+		evidenceRepo,
 		ingestionClient,
 	)
 	go kafka.StartPipelineConsumers(cfg.Kafka, processor, pipelineTaskRepo)

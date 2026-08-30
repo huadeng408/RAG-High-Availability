@@ -6,16 +6,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"github.com/huadeng408/RAG-High-Availability/internal/config"
+	"github.com/huadeng408/RAG-High-Availability/internal/model"
 	"github.com/huadeng408/RAG-High-Availability/internal/repository"
 	"github.com/huadeng408/RAG-High-Availability/pkg/log"
 	"github.com/huadeng408/RAG-High-Availability/pkg/tasks"
+	"net"
 	"strings"
 	"time"
 
 	"github.com/segmentio/kafka-go"
-	"gorm.io/gorm"
 )
 
 // TaskProcessor defines the interface for any service that can process a task.
@@ -297,35 +297,35 @@ func consumeStage(cfg config.KafkaConfig, tracker repository.PipelineTaskReposit
 			task.Stage = stage
 		}
 
-		// 文件级任务：chunk_id 固定为 -1。后续可扩展到 chunk 级别。
-		chunkID := -1
-		if task.TaskChunkID > 0 {
-			chunkID = task.TaskChunkID
+		documentVersion := strings.TrimSpace(task.DocumentVersion)
+		if documentVersion == "" {
+			documentVersion = "upload:" + task.FileMD5
 		}
-		previous, getErr := tracker.GetByKey(task.FileMD5, string(task.Stage), chunkID)
-		if getErr == nil && previous.Status == "SUCCESS" {
+		windowID := pipelineWindowID(task)
+		previous, getErr := tracker.GetOrStart(documentVersion, string(task.Stage), windowID)
+		if getErr == nil && previous.Status == model.PipelineStatusSuccess {
 			_ = r.CommitMessages(context.Background(), m)
 			continue
 		}
-		if getErr != nil && !errors.Is(getErr, gorm.ErrRecordNotFound) {
+		if getErr != nil {
 			log.Errorf("读取任务状态失败, stage=%s file=%s err=%v", stage, task.FileMD5, getErr)
 			time.Sleep(time.Second)
 			continue
 		}
 
-		if _, err := tracker.MarkProcessing(task.FileMD5, string(task.Stage), chunkID); err != nil {
+		if _, err := tracker.MarkProcessingByKey(documentVersion, string(task.Stage), windowID); err != nil {
 			log.Errorf("标记任务处理中失败, stage=%s file=%s err=%v", stage, task.FileMD5, err)
 			time.Sleep(time.Second)
 			continue
 		}
 
 		if err := processor.Process(context.Background(), task); err != nil {
-			retryCount, markErr := tracker.MarkRetry(task.FileMD5, string(task.Stage), chunkID, err.Error())
+			retryCount, markErr := tracker.MarkRetryByKey(documentVersion, string(task.Stage), windowID, err.Error())
 			if markErr != nil {
 				log.Errorf("标记任务重试失败, stage=%s file=%s err=%v", stage, task.FileMD5, markErr)
 			}
 			if retryCount <= cfg.MaxRetries {
-				backoff := time.Duration(cfg.BaseBackoffMs) * time.Millisecond * time.Duration(1<<(retryCount-1))
+				backoff := retryDelay(time.Duration(cfg.BaseBackoffMs)*time.Millisecond, retryCount)
 				log.Warnf("任务处理失败, stage=%s file=%s retry=%d/%d backoff=%s err=%v", stage, task.FileMD5, retryCount, cfg.MaxRetries, backoff, err)
 				time.Sleep(backoff)
 				task.LastError = err.Error()
@@ -334,7 +334,7 @@ func consumeStage(cfg config.KafkaConfig, tracker repository.PipelineTaskReposit
 				}
 			} else {
 				task.LastError = err.Error()
-				_ = tracker.MarkFailed(task.FileMD5, string(task.Stage), chunkID, err.Error())
+				_ = tracker.MarkFailedByKey(documentVersion, string(task.Stage), windowID, err.Error())
 				if dlqErr := ProduceTaskToDLQ(task); dlqErr != nil {
 					log.Errorf("写入 DLQ 失败, stage=%s file=%s err=%v", stage, task.FileMD5, dlqErr)
 				} else {
@@ -345,13 +345,23 @@ func consumeStage(cfg config.KafkaConfig, tracker repository.PipelineTaskReposit
 			continue
 		}
 
-		if err := tracker.MarkSuccess(task.FileMD5, string(task.Stage), chunkID); err != nil {
+		if err := tracker.MarkSuccessByKey(documentVersion, string(task.Stage), windowID); err != nil {
 			log.Errorf("标记任务成功失败, stage=%s file=%s err=%v", stage, task.FileMD5, err)
 		}
 		if err := r.CommitMessages(context.Background(), m); err != nil {
 			log.Errorf("提交 Kafka offset 失败, stage=%s offset=%d err=%v", stage, m.Offset, err)
 		}
 	}
+}
+
+func pipelineWindowID(task tasks.FileProcessingTask) string {
+	if value := strings.TrimSpace(task.WindowID); value != "" {
+		return value
+	}
+	if task.Stage == tasks.StageEmbed && task.TaskChunkID > 0 {
+		return fmt.Sprintf("window-%d", task.TaskChunkID)
+	}
+	return "root"
 }
 
 // parseKafkaBrokers handles parse kafka brokers.

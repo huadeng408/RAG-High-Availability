@@ -42,6 +42,9 @@ func InitES(esCfg config.ElasticsearchConfig, vectorDims int) error {
 		return err
 	}
 	ESClient = client
+	if strings.TrimSpace(esCfg.IndexName) == "" || strings.TrimSpace(esCfg.IndexName) == KnowledgeReadAlias {
+		return EnsureRHAIndices(context.Background(), vectorDims)
+	}
 	return createIndexIfNotExists(esCfg.IndexName, vectorDims)
 }
 
@@ -78,8 +81,8 @@ func EnsureMemoryIndex(indexName string, vectorDims int) error {
 				"memory_type": { "type": "keyword" },
 				"text_content": {
 					"type": "text",
-					"analyzer": "ik_max_word",
-					"search_analyzer": "ik_smart"
+					"analyzer": "standard",
+					"search_analyzer": "standard"
 				},
 				"vector": {
 					"type": "dense_vector",
@@ -131,11 +134,12 @@ func createIndexIfNotExists(indexName string, vectorDims int) error {
 			"properties": {
 				"vector_id": { "type": "keyword" },
 				"file_md5": { "type": "keyword" },
+				"document_version": { "type": "keyword" },
 				"chunk_id": { "type": "integer" },
 				"text_content": {
 					"type": "text",
-					"analyzer": "ik_max_word",
-					"search_analyzer": "ik_smart"
+					"analyzer": "standard",
+					"search_analyzer": "standard"
 				},
 				"vector": {
 					"type": "dense_vector",
@@ -146,7 +150,13 @@ func createIndexIfNotExists(indexName string, vectorDims int) error {
 				"model_version": { "type": "keyword" },
 				"user_id": { "type": "long" },
 				"org_tag": { "type": "keyword" },
-				"is_public": { "type": "boolean" }
+				"is_public": { "type": "boolean" },
+				"modality": { "type": "keyword" },
+				"page": { "type": "integer" },
+				"slide": { "type": "integer" },
+				"sheet": { "type": "keyword" },
+				"evidence_ids": { "type": "keyword" },
+				"bbox": { "type": "object" }
 			}
 		}
 	}`, vectorDims)
@@ -312,6 +322,50 @@ func BulkIndexDocuments(ctx context.Context, indexName string, docs []model.EsDo
 	}
 	if bulkResp.Errors {
 		return errors.New("bulk index completed with partial failures")
+	}
+	return nil
+}
+
+// DeleteDocumentsByFileMD5 removes all indexed chunks for one uploaded file.
+func DeleteDocumentsByFileMD5(ctx context.Context, indexName, fileMD5 string) error {
+	if strings.TrimSpace(indexName) == "" {
+		return errors.New("elasticsearch index name is empty")
+	}
+	if strings.TrimSpace(fileMD5) == "" {
+		return errors.New("file md5 is empty")
+	}
+
+	body := map[string]any{
+		"query": map[string]any{
+			"term": map[string]any{
+				"file_md5": fileMD5,
+			},
+		},
+	}
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+
+	refresh := true
+	allowNoIndices := true
+	ignoreUnavailable := true
+	req := esapi.DeleteByQueryRequest{
+		Index:             []string{indexName},
+		Body:              bytes.NewReader(bodyBytes),
+		Conflicts:         "proceed",
+		Refresh:           &refresh,
+		AllowNoIndices:    &allowNoIndices,
+		IgnoreUnavailable: &ignoreUnavailable,
+	}
+	res, err := req.Do(ctx, ESClient)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.IsError() {
+		bodyBytes, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("delete documents by file_md5 failed: status=%s body=%s", res.Status(), strings.TrimSpace(string(bodyBytes)))
 	}
 	return nil
 }

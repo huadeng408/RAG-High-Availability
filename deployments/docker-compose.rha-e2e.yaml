@@ -1,0 +1,145 @@
+name: rha-e2e
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: "${RHA_E2E_PASSWORD:?RHA_E2E_PASSWORD is required}"
+      MYSQL_DATABASE: RHA
+    volumes:
+      - rha-e2e-mysql:/var/lib/mysql
+      - ../docs/ddl.sql:/docker-entrypoint-initdb.d/001-ddl.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -p$${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7.2-alpine
+    environment:
+      RHA_E2E_PASSWORD: "${RHA_E2E_PASSWORD:?RHA_E2E_PASSWORD is required}"
+    command: ["redis-server", "--requirepass", "${RHA_E2E_PASSWORD:?RHA_E2E_PASSWORD is required}"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${RHA_E2E_PASSWORD}\" ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    environment:
+      MINIO_ROOT_USER: "${RHA_E2E_MINIO_USER:?RHA_E2E_MINIO_USER is required}"
+      MINIO_ROOT_PASSWORD: "${RHA_E2E_MINIO_PASSWORD:?RHA_E2E_MINIO_PASSWORD is required}"
+    command: server /data --console-address ":9001"
+    volumes:
+      - rha-e2e-minio:/data
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    depends_on: [zookeeper]
+    ports: ["9092:9092"]
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:29092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.1
+    depends_on: [kafka]
+    entrypoint: ["/bin/sh", "-c"]
+    command: >-
+      until kafka-topics --bootstrap-server kafka:29092 --list >/dev/null 2>&1; do sleep 2; done;
+      for topic in file-parse file-chunk file-embed file-index file-dlq; do
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic $$topic;
+      done
+
+  es:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.10.4
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.security.enrollment.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    volumes:
+      - rha-e2e-es:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health >/dev/null"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+
+  model-stub:
+    build:
+      context: ..
+      dockerfile: deployments/e2e/Dockerfile
+    ports: ["8010:8010"]
+
+  orchestrator:
+    build:
+      context: ..
+      dockerfile: ai-orchestrator/Dockerfile
+    depends_on: [model-stub]
+    environment:
+      RHA_PORT: "8090"
+      RHA_GO_BASE_URL: http://go:8080
+      RHA_INTERNAL_TOKEN: "${RHA_E2E_INTERNAL_TOKEN:?RHA_E2E_INTERNAL_TOKEN is required}"
+      RHA_INGESTION_MODE: fixture
+      RHA_LLM_BASE_URL: http://model-stub:8010/v1
+      RHA_LLM_API_KEY: not-needed
+      RHA_LLM_MODEL: rha-fixture-chat
+      RHA_PLANNER_BASE_URL: http://model-stub:8010/v1
+      RHA_PLANNER_API_KEY: not-needed
+      RHA_PLANNER_MODEL: rha-fixture-chat
+      RHA_EMBEDDING_BASE_URL: http://model-stub:8010
+      RHA_EMBEDDING_MODEL: rha-fixture-embedding
+      RHA_EMBEDDING_DIMENSIONS: "8"
+      RHA_ES_URL: http://es:9200
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/healthz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  go:
+    build:
+      context: ..
+      dockerfile: deployments/Dockerfile
+    depends_on:
+      mysql: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      kafka: {condition: service_healthy}
+      es: {condition: service_healthy}
+      orchestrator: {condition: service_healthy}
+    environment:
+      RHA_CONFIG: /app/config.rha-docker-e2e.yaml
+    volumes:
+      - ${RHA_E2E_CONFIG_PATH:?RHA_E2E_CONFIG_PATH is required}:/app/config.rha-docker-e2e.yaml:ro
+    ports: ["8080:8080"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  rha-e2e-mysql:
+  rha-e2e-minio:
+  rha-e2e-es:

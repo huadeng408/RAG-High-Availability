@@ -4,6 +4,12 @@ import contextvars
 import logging
 import time
 import uuid
+from contextlib import contextmanager
+
+try:
+    from opentelemetry import trace as otel_trace
+except ImportError:  # pragma: no cover - optional runtime dependency
+    otel_trace = None
 
 
 _trace_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("rha_trace_id", default="")
@@ -46,3 +52,22 @@ def log_request(message: str, **kwargs) -> None:
 
 def elapsed_ms(start: float) -> int:
     return int((time.perf_counter() - start) * 1000)
+
+
+@contextmanager
+def start_span(name: str, **attributes):
+    """Create an OTel span when configured while always preserving trace logs."""
+    tracer = otel_trace.get_tracer("rha.orchestrator") if otel_trace is not None else None
+    if tracer is None:
+        started = time.perf_counter()
+        log_request("span_start", span=name, **attributes)
+        try:
+            yield None
+        finally:
+            log_request("span_end", span=name, latency_ms=elapsed_ms(started), **attributes)
+        return
+    with tracer.start_as_current_span(name) as span:
+        span.set_attribute("rha.trace_id", current_trace_id())
+        for key, value in attributes.items():
+            span.set_attribute(str(key), str(value))
+        yield span

@@ -1,43 +1,46 @@
-// Package service 包含了应用的业务逻辑层。
+// Package service contains application business logic.
 package service
 
 import (
 	"context"
 	"errors"
 	"net/url"
-	"github.com/huadeng408/RAG-High-Availability/internal/config"
-	"github.com/huadeng408/RAG-High-Availability/internal/model"
-	"github.com/huadeng408/RAG-High-Availability/internal/repository"
-	"github.com/huadeng408/RAG-High-Availability/pkg/objectpath"
-	"github.com/huadeng408/RAG-High-Availability/pkg/storage"
 	"strings"
 	"time"
 
-	"github.com/minio/minio-go/v7"
+	"github.com/huadeng408/RAG-High-Availability/internal/config"
+	"github.com/huadeng408/RAG-High-Availability/internal/model"
+	"github.com/huadeng408/RAG-High-Availability/internal/repository"
+	"github.com/huadeng408/RAG-High-Availability/pkg/database"
+	"github.com/huadeng408/RAG-High-Availability/pkg/es"
+	"github.com/huadeng408/RAG-High-Availability/pkg/objectpath"
+	"github.com/huadeng408/RAG-High-Availability/pkg/storage"
 	"github.com/huadeng408/RAG-High-Availability/pkg/tika"
+
+	"github.com/minio/minio-go/v7"
 )
 
-// FileUploadDTO 是一个数据传输对象，用于在返回给前端时隐藏一些字段并添加额外信息。
+// FileUploadDTO is returned to the frontend with resolved organization tag names.
 type FileUploadDTO struct {
 	model.FileUpload
 	OrgTagName string `json:"orgTagName"`
 }
 
-// DownloadInfoDTO 封装了文件下载链接所需的信息。
+// DownloadInfoDTO contains temporary download information for a file.
 type DownloadInfoDTO struct {
 	FileName    string `json:"fileName"`
 	DownloadURL string `json:"downloadUrl"`
 	FileSize    int64  `json:"fileSize"`
 }
 
-// PreviewInfoDTO 封装了文件预览所需的信息。
+// PreviewInfoDTO contains text preview information for a file.
 type PreviewInfoDTO struct {
 	FileName string `json:"fileName"`
 	Content  string `json:"content"`
 	FileSize int64  `json:"fileSize"`
 }
 
-// DocumentService 接口定义了文档管理相关的业务操作。
+// DocumentService defines document management operations.
 type DocumentService interface {
 	ListAccessibleFiles(user *model.User) ([]model.FileUpload, error)
 	ListUploadedFiles(userID uint) ([]FileUploadDTO, error)
@@ -48,31 +51,46 @@ type DocumentService interface {
 
 // documentService implements document operations.
 type documentService struct {
-	uploadRepo repository.UploadRepository
-	userRepo   repository.UserRepository
-	orgTagRepo repository.OrgTagRepository // 新增依赖
-	minioCfg   config.MinIOConfig
-	tikaClient *tika.Client // 新增依赖
+	uploadRepo       repository.UploadRepository
+	userRepo         repository.UserRepository
+	orgTagRepo       repository.OrgTagRepository
+	docVectorRepo    repository.DocumentVectorRepository
+	pipelineTaskRepo repository.PipelineTaskRepository
+	minioCfg         config.MinIOConfig
+	esIndexName      string
+	tikaClient       *tika.Client
 }
 
-// NewDocumentService 创建一个新的 DocumentService 实例。
-func NewDocumentService(uploadRepo repository.UploadRepository, userRepo repository.UserRepository, orgTagRepo repository.OrgTagRepository, minioCfg config.MinIOConfig, tikaClient *tika.Client) DocumentService {
+// NewDocumentService creates a DocumentService.
+func NewDocumentService(
+	uploadRepo repository.UploadRepository,
+	userRepo repository.UserRepository,
+	orgTagRepo repository.OrgTagRepository,
+	docVectorRepo repository.DocumentVectorRepository,
+	pipelineTaskRepo repository.PipelineTaskRepository,
+	minioCfg config.MinIOConfig,
+	esIndexName string,
+	tikaClient *tika.Client,
+) DocumentService {
 	return &documentService{
-		uploadRepo: uploadRepo,
-		userRepo:   userRepo,
-		orgTagRepo: orgTagRepo,
-		minioCfg:   minioCfg,
-		tikaClient: tikaClient,
+		uploadRepo:       uploadRepo,
+		userRepo:         userRepo,
+		orgTagRepo:       orgTagRepo,
+		docVectorRepo:    docVectorRepo,
+		pipelineTaskRepo: pipelineTaskRepo,
+		minioCfg:         minioCfg,
+		esIndexName:      esIndexName,
+		tikaClient:       tikaClient,
 	}
 }
 
-// ListAccessibleFiles 获取用户可访问的文件列表。
+// ListAccessibleFiles returns files the user can access.
 func (s *documentService) ListAccessibleFiles(user *model.User) ([]model.FileUpload, error) {
 	orgTags := strings.Split(user.OrgTags, ",")
 	return s.uploadRepo.FindAccessibleFiles(user.ID, orgTags)
 }
 
-// ListUploadedFiles 获取用户自己上传的文件列表，并附加组织标签名称。
+// ListUploadedFiles returns files uploaded by one user.
 func (s *documentService) ListUploadedFiles(userID uint) ([]FileUploadDTO, error) {
 	files, err := s.uploadRepo.FindFilesByUserID(userID)
 	if err != nil {
@@ -87,33 +105,46 @@ func (s *documentService) ListUploadedFiles(userID uint) ([]FileUploadDTO, error
 	return dtos, nil
 }
 
-// DeleteDocument 删除一个文档。
+// DeleteDocument deletes a document and its derived search artifacts.
 func (s *documentService) DeleteDocument(fileMD5 string, user *model.User) error {
 	record, err := s.uploadRepo.GetFileUploadRecordByMD5(fileMD5)
 	if err != nil {
-		return errors.New("文件不存在或不属于该用户")
+		return errors.New("file not found or not accessible")
 	}
 
 	if record.UserID != user.ID && user.Role != "ADMIN" {
-		return errors.New("没有权限删除此文件")
+		return errors.New("permission denied to delete this file")
 	}
+
+	ctx := context.Background()
+	if err := es.DeleteDocumentsByFileMD5(ctx, s.esIndexName, fileMD5); err != nil {
+		return err
+	}
+	if err := s.docVectorRepo.DeleteByFileMD5(fileMD5); err != nil {
+		return err
+	}
+	if err := s.uploadRepo.DeleteChunkInfoByFileMD5(fileMD5); err != nil {
+		return err
+	}
+	if err := s.pipelineTaskRepo.DeleteByFileMD5(fileMD5); err != nil {
+		return err
+	}
+
+	_ = s.uploadRepo.DeleteUploadMark(ctx, fileMD5, record.UserID)
+	_ = database.RDB.Del(ctx, "pipeline:embeddings:"+fileMD5).Err()
 
 	objectName := objectpath.MergedObjectName(record.FileMD5, record.FileName)
-	err = storage.MinioClient.RemoveObject(context.Background(), s.minioCfg.BucketName, objectName, minio.RemoveObjectOptions{})
-	if err != nil {
-		// Log or ignore error, but proceed to delete DB record
-	}
+	_ = storage.MinioClient.RemoveObject(ctx, s.minioCfg.BucketName, objectName, minio.RemoveObjectOptions{})
+	_ = storage.MinioClient.RemoveObject(ctx, s.minioCfg.BucketName, objectpath.ParsedObjectName(fileMD5), minio.RemoveObjectOptions{})
 
-	// 从数据库删除记录
 	if user.Role == "ADMIN" {
 		return s.uploadRepo.DeleteFileUploadRecordByMD5(fileMD5)
 	}
 	return s.uploadRepo.DeleteFileUploadRecord(fileMD5, record.UserID)
 }
 
-// GenerateDownloadURL 生成文件的临时下载链接。
+// GenerateDownloadURL creates a temporary download URL for a file.
 func (s *documentService) GenerateDownloadURL(fileName string, user *model.User) (*DownloadInfoDTO, error) {
-	// 这是一个简化的实现，假设文件名是唯一的。生产环境需要更复杂的逻辑。
 	files, err := s.ListAccessibleFiles(user)
 	if err != nil {
 		return nil, err
@@ -128,10 +159,9 @@ func (s *documentService) GenerateDownloadURL(fileName string, user *model.User)
 	}
 
 	if targetFile == nil {
-		return nil, errors.New("文件不存在或无权访问")
+		return nil, errors.New("file not found or not accessible")
 	}
 
-	// 生成预签名的 URL，有效期为1小时
 	expiry := time.Hour
 	objectName := objectpath.MergedObjectName(targetFile.FileMD5, targetFile.FileName)
 	presignedURL, err := storage.MinioClient.PresignedGetObject(context.Background(), s.minioCfg.BucketName, objectName, expiry, url.Values{})
@@ -146,9 +176,8 @@ func (s *documentService) GenerateDownloadURL(fileName string, user *model.User)
 	}, nil
 }
 
-// GetFilePreviewContent 获取文件的纯文本预览内容。
+// GetFilePreviewContent extracts text preview content for a file.
 func (s *documentService) GetFilePreviewContent(fileName string, user *model.User) (*PreviewInfoDTO, error) {
-	// 权限检查逻辑与下载类似
 	files, err := s.ListAccessibleFiles(user)
 	if err != nil {
 		return nil, err
@@ -163,10 +192,9 @@ func (s *documentService) GetFilePreviewContent(fileName string, user *model.Use
 	}
 
 	if targetFile == nil {
-		return nil, errors.New("文件不存在或无权访问")
+		return nil, errors.New("file not found or not accessible")
 	}
 
-	// 从 MinIO 获取文件对象
 	objectName := objectpath.MergedObjectName(targetFile.FileMD5, targetFile.FileName)
 	object, err := storage.MinioClient.GetObject(context.Background(), s.minioCfg.BucketName, objectName, minio.GetObjectOptions{})
 	if err != nil {
@@ -174,7 +202,6 @@ func (s *documentService) GetFilePreviewContent(fileName string, user *model.Use
 	}
 	defer object.Close()
 
-	// 将文件流发送给 Tika 进行文本提取
 	content, err := s.tikaClient.ExtractText(object, fileName)
 	if err != nil {
 		return nil, err
@@ -187,13 +214,12 @@ func (s *documentService) GetFilePreviewContent(fileName string, user *model.Use
 	}, nil
 }
 
-// mapFileUploadsToDTOs handles map file uploads to dt os.
+// mapFileUploadsToDTOs resolves organization tag names for file uploads.
 func (s *documentService) mapFileUploadsToDTOs(files []model.FileUpload) ([]FileUploadDTO, error) {
 	if len(files) == 0 {
 		return []FileUploadDTO{}, nil
 	}
 
-	// To avoid N+1 queries, get all unique org tag IDs first
 	tagIDs := make(map[string]struct{})
 	for _, file := range files {
 		if file.OrgTag != "" {
@@ -220,7 +246,7 @@ func (s *documentService) mapFileUploadsToDTOs(files []model.FileUpload) ([]File
 	for i, file := range files {
 		dtos[i] = FileUploadDTO{
 			FileUpload: file,
-			OrgTagName: tagMap[file.OrgTag], // Will be empty string if not found
+			OrgTagName: tagMap[file.OrgTag],
 		}
 	}
 

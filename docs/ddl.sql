@@ -69,12 +69,23 @@ CREATE TABLE pipeline_task (
 CREATE TABLE document_vectors (
     vector_id BIGINT AUTO_INCREMENT PRIMARY KEY,
     file_md5 VARCHAR(32) NOT NULL,
+    document_version VARCHAR(96) NOT NULL,
     chunk_id INT NOT NULL,
     text_content TEXT,
     model_version VARCHAR(128),
     user_id VARCHAR(64) NOT NULL,
     org_tag VARCHAR(50),
-    is_public TINYINT(1) NOT NULL DEFAULT 0
+    is_public TINYINT(1) NOT NULL DEFAULT 0,
+    modality VARCHAR(32),
+    page_number INT NULL,
+    slide_number INT NULL,
+    sheet_name VARCHAR(255) NULL,
+    row_start INT NULL,
+    row_end INT NULL,
+    evidence_ids JSON NULL,
+    bbox JSON NULL,
+    UNIQUE KEY uk_document_vectors_version_chunk (document_version, chunk_id),
+    INDEX idx_document_vectors_version (document_version)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE document_versions (
@@ -104,6 +115,8 @@ CREATE TABLE evidence_units (
     parser_name VARCHAR(128) NOT NULL,
     parser_version VARCHAR(64) NOT NULL,
     asset_path VARCHAR(512) NULL,
+    heading_path JSON NULL,
+    header JSON NULL,
     owner_id VARCHAR(64) NULL,
     org_tag VARCHAR(50) NULL,
     is_public TINYINT(1) NOT NULL DEFAULT 0,

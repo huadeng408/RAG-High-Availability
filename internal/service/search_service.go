@@ -21,6 +21,7 @@ import (
 	"github.com/huadeng408/RAG-High-Availability/pkg/embedding"
 	"github.com/huadeng408/RAG-High-Availability/pkg/log"
 	"github.com/huadeng408/RAG-High-Availability/pkg/objectpath"
+	"github.com/huadeng408/RAG-High-Availability/pkg/observability"
 	"github.com/huadeng408/RAG-High-Availability/pkg/reranker"
 
 	"github.com/elastic/go-elasticsearch/v8"
@@ -146,6 +147,8 @@ func (s *searchService) HybridSearch(ctx context.Context, query string, topK int
 
 // Search handles search.
 func (s *searchService) Search(ctx context.Context, options SearchOptions, user *model.User) ([]model.SearchResponseDTO, error) {
+	ctx, span := observability.StartSpan(ctx, "retrieval.search")
+	defer span.End()
 	start := time.Now()
 	query := strings.TrimSpace(options.Query)
 	if query == "" {
@@ -266,6 +269,7 @@ func (s *searchService) Search(ctx context.Context, options SearchOptions, user 
 	if rerankerEnabled {
 		finalHits, rerankApplied, rerankTimeout = s.rerankHits(ctx, query, fusedHits, returnTopK)
 	}
+	span.SetAttribute("rerank_skipped", strconv.FormatBool(rerankerEnabled && !rerankApplied))
 
 	results, err := s.buildResponseDTOs(finalHits)
 	if err != nil {
@@ -445,23 +449,42 @@ func (s *searchService) rerankHits(ctx context.Context, query string, fusedHits 
 		return truncateHits(fusedHits, returnTopK), false, false
 	}
 
+	timeout := time.Duration(s.retrievalCfg.RerankTimeoutMs) * time.Millisecond
+	reranked, applied, timedOut, err := rerankWithTimeout(ctx, s.rerankerClient, query, candidates, returnTopK, timeout)
+	if err != nil {
+		log.Warnf("[SearchService] rerank degraded for query=%q timeout=%t: %v", query, timedOut, err)
+		return truncateHits(fusedHits, returnTopK), false, timedOut
+	}
+	return reranked, applied, timedOut
+}
+
+// rerankWithDeadline is a deterministic short-deadline boundary used by
+// reliability tests and callers that need a non-fatal reranker probe.
+func rerankWithDeadline(ctx context.Context, client reranker.Client, fusedHits []retrievalHit, returnTopK int) ([]retrievalHit, bool, bool) {
+	hits, applied, timedOut, err := rerankWithTimeout(ctx, client, "", fusedHits, returnTopK, 10*time.Millisecond)
+	if err != nil {
+		return truncateHits(fusedHits, returnTopK), false, timedOut
+	}
+	return hits, applied, timedOut
+}
+
+func rerankWithTimeout(ctx context.Context, client reranker.Client, query string, candidates []retrievalHit, returnTopK int, timeout time.Duration) ([]retrievalHit, bool, bool, error) {
+	if len(candidates) == 0 || returnTopK <= 0 {
+		return []retrievalHit{}, false, false, nil
+	}
+	if timeout <= 0 {
+		timeout = 120 * time.Millisecond
+	}
 	docs := make([]reranker.Document, 0, len(candidates))
 	for _, hit := range candidates {
-		docs = append(docs, reranker.Document{
-			ID:   candidateKey(hit.Source, hit.ID),
-			Text: hit.Source.TextContent,
-		})
+		docs = append(docs, reranker.Document{ID: candidateKey(hit.Source, hit.ID), Text: hit.Source.TextContent})
 	}
-
-	timeout := time.Duration(s.retrievalCfg.RerankTimeoutMs) * time.Millisecond
 	rerankCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-
-	results, err := s.rerankerClient.Rerank(rerankCtx, query, docs, returnTopK)
+	results, err := client.Rerank(rerankCtx, query, docs, returnTopK)
 	if err != nil {
 		timeoutHit := isTimeoutError(err) || errors.Is(rerankCtx.Err(), context.DeadlineExceeded)
-		log.Warnf("[SearchService] rerank degraded for query=%q timeout=%t: %v", query, timeoutHit, err)
-		return truncateHits(fusedHits, returnTopK), false, timeoutHit
+		return nil, false, timeoutHit, err
 	}
 
 	reranked := make([]retrievalHit, 0, minInt(returnTopK, len(candidates)))
@@ -492,7 +515,7 @@ func (s *searchService) rerankHits(ctx context.Context, query string, fusedHits 
 		reranked = append(reranked, hit)
 	}
 
-	return reranked, len(reranked) > 0, false
+	return reranked, len(reranked) > 0, false, nil
 }
 
 // buildResponseDTOs builds response dt os.
@@ -564,6 +587,7 @@ func (s *searchService) logRetrievalMetrics(query, normalizedQuery, rawPhrase st
 		"latencyP95Ms", snapshot.LatencyP95Ms,
 		"rerankApplied", obs.RerankApplied,
 		"rerankTimeout", obs.RerankTimeout,
+		"rerankSkipped", !obs.RerankApplied && !obs.RerankTimeout,
 		"rerankTimeoutRate", snapshot.RerankTimeoutRate,
 	)
 }

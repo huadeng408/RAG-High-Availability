@@ -49,7 +49,7 @@ elasticsearch:
   addresses: "http://127.0.0.1:9200"
   username: ""
   password: ""
-  index_name: "knowledge_base"
+  index_name: "rha-knowledge-active"
 
 # Embedding model config
 embedding:

@@ -20,11 +20,11 @@ type DocumentSource struct {
 
 // DocumentVersion records the parser receipt for one immutable source version.
 type DocumentVersion struct {
-	DocumentVersionID string    `gorm:"column:document_version;primaryKey" json:"documentVersion"`
-	SourceID          string    `gorm:"column:source_id;not null;uniqueIndex:idx_document_version_source_hash,priority:1" json:"sourceId"`
-	ContentSHA256     string    `gorm:"column:content_sha256;not null;uniqueIndex:idx_document_version_source_hash,priority:2" json:"contentSha256"`
-	ParserName        string    `gorm:"column:parser_name;not null" json:"parserName"`
-	ParserVersion     string    `gorm:"column:parser_version;not null" json:"parserVersion"`
+	DocumentVersionID string    `gorm:"column:document_version;type:varchar(96);primaryKey" json:"documentVersion"`
+	SourceID          string    `gorm:"column:source_id;type:varchar(96);not null;uniqueIndex:idx_document_version_source_hash,priority:1" json:"sourceId"`
+	ContentSHA256     string    `gorm:"column:content_sha256;type:char(64);not null;uniqueIndex:idx_document_version_source_hash,priority:2" json:"contentSha256"`
+	ParserName        string    `gorm:"column:parser_name;type:varchar(128);not null" json:"parserName"`
+	ParserVersion     string    `gorm:"column:parser_version;type:varchar(64);not null" json:"parserVersion"`
 	CreatedAt         time.Time `gorm:"column:created_at;autoCreateTime" json:"createdAt"`
 }
 

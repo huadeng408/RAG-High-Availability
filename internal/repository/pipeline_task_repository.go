@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/huadeng408/RAG-High-Availability/internal/model"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -13,12 +14,17 @@ import (
 // PipelineTaskRepository defines persistence operations for pipeline task data.
 type PipelineTaskRepository interface {
 	GetOrStart(documentVersion, stage, windowID string) (*model.PipelineTask, error)
+	MarkProcessingByKey(documentVersion, stage, windowID string) (*model.PipelineTask, error)
+	MarkSuccessByKey(documentVersion, stage, windowID string) error
+	MarkRetryByKey(documentVersion, stage, windowID, lastError string) (int, error)
+	MarkFailedByKey(documentVersion, stage, windowID, lastError string) error
 	GetByKey(fileMD5, stage string, chunkID int) (*model.PipelineTask, error)
 	MarkProcessing(fileMD5, stage string, chunkID int) (*model.PipelineTask, error)
 	MarkSuccess(fileMD5, stage string, chunkID int) error
 	MarkRetry(fileMD5, stage string, chunkID int, lastError string) (int, error)
 	MarkFailed(fileMD5, stage string, chunkID int, lastError string) error
 	ListFailedByFile(fileMD5 string) ([]model.PipelineTask, error)
+	DeleteByFileMD5(fileMD5 string) error
 }
 
 // pipelineTaskRepository implements persistence operations for pipeline task data.
@@ -62,6 +68,49 @@ func (r *pipelineTaskRepository) GetOrStart(documentVersion, stage, windowID str
 	return task, nil
 }
 
+func (r *pipelineTaskRepository) MarkProcessingByKey(documentVersion, stage, windowID string) (*model.PipelineTask, error) {
+	task, err := r.GetOrStart(documentVersion, stage, windowID)
+	if err != nil {
+		return nil, err
+	}
+	task.Status = model.PipelineStatusProcessing
+	return task, r.db.Save(task).Error
+}
+
+func (r *pipelineTaskRepository) MarkSuccessByKey(documentVersion, stage, windowID string) error {
+	task, err := r.MarkProcessingByKey(documentVersion, stage, windowID)
+	if err != nil {
+		return err
+	}
+	task.Status = model.PipelineStatusSuccess
+	task.LastError = ""
+	task.NextAttemptAt = nil
+	return r.db.Save(task).Error
+}
+
+func (r *pipelineTaskRepository) MarkRetryByKey(documentVersion, stage, windowID, lastError string) (int, error) {
+	task, err := r.MarkProcessingByKey(documentVersion, stage, windowID)
+	if err != nil {
+		return 0, err
+	}
+	task.Status = model.PipelineStatusFailed
+	task.RetryCount++
+	task.LastError = lastError
+	next := time.Now().Add(pipelineRetryBackoff(task.RetryCount))
+	task.NextAttemptAt = &next
+	return task.RetryCount, r.db.Save(task).Error
+}
+
+func (r *pipelineTaskRepository) MarkFailedByKey(documentVersion, stage, windowID, lastError string) error {
+	task, err := r.MarkProcessingByKey(documentVersion, stage, windowID)
+	if err != nil {
+		return err
+	}
+	task.Status = model.PipelineStatusFailed
+	task.LastError = lastError
+	return r.db.Save(task).Error
+}
+
 // GetByKey returns by key.
 func (r *pipelineTaskRepository) GetByKey(fileMD5, stage string, chunkID int) (*model.PipelineTask, error) {
 	var task model.PipelineTask
@@ -80,12 +129,14 @@ func (r *pipelineTaskRepository) MarkProcessing(fileMD5, stage string, chunkID i
 			return nil, err
 		}
 		task = &model.PipelineTask{
-			FileMD5:        fileMD5,
-			Stage:          stage,
-			ChunkID:        chunkID,
-			Status:         model.PipelineStatusProcessing,
-			RetryCount:     0,
-			IdempotencyKey: buildPipelineKey(fileMD5, stage, chunkID),
+			FileMD5:         fileMD5,
+			DocumentVersion: "upload:" + fileMD5,
+			Stage:           stage,
+			WindowID:        fmt.Sprintf("%d", chunkID),
+			ChunkID:         chunkID,
+			Status:          model.PipelineStatusProcessing,
+			RetryCount:      0,
+			IdempotencyKey:  buildPipelineKey(fileMD5, stage, chunkID),
 		}
 		return task, r.db.Create(task).Error
 	}
@@ -113,6 +164,8 @@ func (r *pipelineTaskRepository) MarkRetry(fileMD5, stage string, chunkID int, l
 	task.Status = model.PipelineStatusFailed
 	task.RetryCount++
 	task.LastError = lastError
+	next := time.Now().Add(pipelineRetryBackoff(task.RetryCount))
+	task.NextAttemptAt = &next
 	return task.RetryCount, r.db.Save(task).Error
 }
 
@@ -132,4 +185,27 @@ func (r *pipelineTaskRepository) ListFailedByFile(fileMD5 string) ([]model.Pipel
 	var tasks []model.PipelineTask
 	err := r.db.Where("file_md5 = ? AND status = ?", fileMD5, model.PipelineStatusFailed).Order("updated_at desc").Find(&tasks).Error
 	return tasks, err
+}
+
+// DeleteByFileMD5 deletes all pipeline task rows for one file.
+func (r *pipelineTaskRepository) DeleteByFileMD5(fileMD5 string) error {
+	return r.db.Where("file_md5 = ?", fileMD5).Delete(&model.PipelineTask{}).Error
+}
+
+func pipelineRetryBackoff(retryCount int) time.Duration {
+	base := 800 * time.Millisecond
+	if retryCount <= 1 {
+		return base
+	}
+	delay := base
+	for attempt := 1; attempt < retryCount; attempt++ {
+		if delay >= 2500*time.Millisecond {
+			return 5 * time.Second
+		}
+		delay *= 2
+	}
+	if delay > 5*time.Second {
+		return 5 * time.Second
+	}
+	return delay
 }

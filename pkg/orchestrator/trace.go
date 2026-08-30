@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"strings"
+
+	"github.com/huadeng408/RAG-High-Availability/pkg/observability"
 )
 
 type traceIDKey struct{}
@@ -15,7 +17,7 @@ func WithTraceID(ctx context.Context, traceID string) context.Context {
 	if traceID == "" {
 		return ctx
 	}
-	return context.WithValue(ctx, traceIDKey{}, traceID)
+	return observability.WithTraceID(context.WithValue(ctx, traceIDKey{}, traceID), traceID)
 }
 
 // TraceIDFromContext loads the current trace id from context, if present.
@@ -24,7 +26,10 @@ func TraceIDFromContext(ctx context.Context) string {
 		return ""
 	}
 	value, _ := ctx.Value(traceIDKey{}).(string)
-	return strings.TrimSpace(value)
+	if value = strings.TrimSpace(value); value != "" {
+		return value
+	}
+	return observability.TraceID(ctx)
 }
 
 // EnsureTraceID returns a context that always carries a trace id plus the resolved trace id value.

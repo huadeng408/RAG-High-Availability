@@ -26,6 +26,12 @@ type Config struct {
 	Reranker      RerankerConfig      `mapstructure:"reranker"`
 	Memory        MemoryConfig        `mapstructure:"memory"`
 	AI            AIConfig            `mapstructure:"ai"`
+	Observability ObservabilityConfig `mapstructure:"observability"`
+}
+
+// ObservabilityConfig controls optional OTLP export while trace IDs remain local by default.
+type ObservabilityConfig struct {
+	OTLPEndpoint string `mapstructure:"otlp_endpoint"`
 }
 
 // ServerConfig 存储服务器相关的配置。

@@ -22,6 +22,7 @@ import (
 	"github.com/huadeng408/RAG-High-Availability/pkg/kafka"
 	"github.com/huadeng408/RAG-High-Availability/pkg/log"
 	"github.com/huadeng408/RAG-High-Availability/pkg/objectpath"
+	"github.com/huadeng408/RAG-High-Availability/pkg/observability"
 	orchestratorclient "github.com/huadeng408/RAG-High-Availability/pkg/orchestrator"
 	"github.com/huadeng408/RAG-High-Availability/pkg/storage"
 	"github.com/huadeng408/RAG-High-Availability/pkg/tasks"
@@ -38,15 +39,17 @@ const (
 
 // Processor represents a processor.
 type Processor struct {
-	tikaClient      *tika.Client
-	embeddingClient embedding.Client
-	esCfg           config.ElasticsearchConfig
-	minioCfg        config.MinIOConfig
-	embeddingCfg    config.EmbeddingConfig
-	kafkaCfg        config.KafkaConfig
-	uploadRepo      repository.UploadRepository
-	docVectorRepo   repository.DocumentVectorRepository
-	ingestionClient orchestratorclient.IngestionClient
+	tikaClient          *tika.Client
+	embeddingClient     embedding.Client
+	esCfg               config.ElasticsearchConfig
+	minioCfg            config.MinIOConfig
+	embeddingCfg        config.EmbeddingConfig
+	kafkaCfg            config.KafkaConfig
+	uploadRepo          repository.UploadRepository
+	docVectorRepo       repository.DocumentVectorRepository
+	documentVersionRepo repository.DocumentVersionRepository
+	evidenceRepo        repository.EvidenceRepository
+	ingestionClient     orchestratorclient.IngestionClient
 }
 
 // NewProcessor creates a processor.
@@ -59,23 +62,33 @@ func NewProcessor(
 	kafkaCfg config.KafkaConfig,
 	uploadRepo repository.UploadRepository,
 	docVectorRepo repository.DocumentVectorRepository,
+	documentVersionRepo repository.DocumentVersionRepository,
+	evidenceRepo repository.EvidenceRepository,
 	ingestionClient orchestratorclient.IngestionClient,
 ) *Processor {
 	return &Processor{
-		tikaClient:      tikaClient,
-		embeddingClient: embeddingClient,
-		esCfg:           esCfg,
-		minioCfg:        minioCfg,
-		embeddingCfg:    embeddingCfg,
-		kafkaCfg:        kafkaCfg,
-		uploadRepo:      uploadRepo,
-		docVectorRepo:   docVectorRepo,
-		ingestionClient: ingestionClient,
+		tikaClient:          tikaClient,
+		embeddingClient:     embeddingClient,
+		esCfg:               esCfg,
+		minioCfg:            minioCfg,
+		embeddingCfg:        embeddingCfg,
+		kafkaCfg:            kafkaCfg,
+		uploadRepo:          uploadRepo,
+		docVectorRepo:       docVectorRepo,
+		documentVersionRepo: documentVersionRepo,
+		evidenceRepo:        evidenceRepo,
+		ingestionClient:     ingestionClient,
 	}
 }
 
 // Process handles process.
 func (p *Processor) Process(ctx context.Context, task tasks.FileProcessingTask) error {
+	if task.TraceID != "" {
+		ctx = observability.WithTraceID(ctx, task.TraceID)
+	}
+	ctx, span := observability.StartSpan(ctx, "pipeline."+string(task.Stage))
+	defer span.End()
+	span.SetAttribute("document_version", taskIdentity(task))
 	switch task.Stage {
 	case tasks.StageParse:
 		return p.processParse(ctx, task)
@@ -112,6 +125,12 @@ func (p *Processor) processParse(ctx context.Context, task tasks.FileProcessingT
 	}
 	if size == 0 {
 		return errors.New("parse: empty file content")
+	}
+	if task.DocumentVersion == "" {
+		task, err = p.ensureTaskVersion(ctx, task, buf.Bytes())
+		if err != nil {
+			return fmt.Errorf("parse: create document version failed: %w", err)
+		}
 	}
 
 	textContent, err := p.tikaClient.ExtractText(bytes.NewReader(buf.Bytes()), task.FileName)
@@ -178,21 +197,22 @@ func (p *Processor) processChunk(ctx context.Context, task tasks.FileProcessingT
 		return errors.New("chunk: no chunks generated")
 	}
 
-	if err := p.docVectorRepo.DeleteByFileMD5(task.FileMD5); err != nil {
-		log.Warnf("[Processor][chunk] clear old chunks failed file=%s err=%v", task.FileMD5, err)
+	if err := p.deleteVectors(task); err != nil {
+		log.Warnf("[Processor][chunk] clear old chunks identity=%s err=%v", taskIdentity(task), err)
 	}
-	_ = database.RDB.Del(ctx, p.embeddingCacheKey(task.FileMD5)).Err()
+	_ = database.RDB.Del(ctx, p.embeddingCacheKey(taskIdentity(task))).Err()
 
 	dbVectors := make([]*model.DocumentVector, 0, len(chunks))
 	for i, chunk := range chunks {
 		dbVectors = append(dbVectors, &model.DocumentVector{
-			FileMD5:      task.FileMD5,
-			ChunkID:      i,
-			TextContent:  chunk,
-			ModelVersion: p.embeddingCfg.Model,
-			UserID:       task.UserID,
-			OrgTag:       task.OrgTag,
-			IsPublic:     task.IsPublic,
+			FileMD5:         task.FileMD5,
+			DocumentVersion: taskIdentity(task),
+			ChunkID:         i,
+			TextContent:     chunk,
+			ModelVersion:    p.embeddingCfg.Model,
+			UserID:          task.UserID,
+			OrgTag:          task.OrgTag,
+			IsPublic:        task.IsPublic,
 		})
 	}
 	if err := p.docVectorRepo.BatchCreate(dbVectors); err != nil {
@@ -224,14 +244,14 @@ func (p *Processor) processEmbed(ctx context.Context, task tasks.FileProcessingT
 		return p.processEmbedExternal(ctx, task)
 	}
 
-	cacheKey := p.embeddingCacheKey(task.FileMD5)
+	cacheKey := p.embeddingCacheKey(taskIdentity(task))
 	if err := p.ensureEmbeddingHashCache(ctx, cacheKey); err != nil {
 		return fmt.Errorf("embed: prepare cache failed: %w", err)
 	}
 
 	totalChunks := task.TotalChunks
 	if totalChunks <= 0 {
-		count, err := p.docVectorRepo.CountByFileMD5(task.FileMD5)
+		count, err := p.countVectors(task)
 		if err != nil {
 			return fmt.Errorf("embed: count chunks failed: %w", err)
 		}
@@ -255,7 +275,7 @@ func (p *Processor) processEmbed(ctx context.Context, task tasks.FileProcessingT
 	if remaining < limit {
 		limit = remaining
 	}
-	savedVectors, err := p.docVectorRepo.FindByFileMD5Range(task.FileMD5, chunkStart, limit)
+	savedVectors, err := p.findVectorRange(task, chunkStart, limit)
 	if err != nil {
 		return fmt.Errorf("embed: load chunk range failed start=%d limit=%d: %w", chunkStart, limit, err)
 	}
@@ -353,7 +373,7 @@ func (p *Processor) processIndex(ctx context.Context, task tasks.FileProcessingT
 		return p.processIndexExternal(ctx, task)
 	}
 
-	savedVectors, err := p.docVectorRepo.FindByFileMD5(task.FileMD5)
+	savedVectors, err := p.findVectors(task)
 	if err != nil {
 		return fmt.Errorf("index: load chunks failed: %w", err)
 	}
@@ -361,7 +381,7 @@ func (p *Processor) processIndex(ctx context.Context, task tasks.FileProcessingT
 		return errors.New("index: chunks are empty")
 	}
 
-	cacheKey := p.embeddingCacheKey(task.FileMD5)
+	cacheKey := p.embeddingCacheKey(taskIdentity(task))
 	vectorMap, err := p.loadCachedEmbeddingMap(ctx, cacheKey)
 	if err != nil {
 		return fmt.Errorf("index: read cached vectors failed: %w", err)
@@ -377,15 +397,22 @@ func (p *Processor) processIndex(ctx context.Context, task tasks.FileProcessingT
 			return fmt.Errorf("index: missing vector for chunk=%d", item.ChunkID)
 		}
 		docs = append(docs, model.EsDocument{
-			VectorID:     task.FileMD5 + "_" + strconv.Itoa(item.ChunkID),
-			FileMD5:      item.FileMD5,
-			ChunkID:      item.ChunkID,
-			TextContent:  item.TextContent,
-			Vector:       vector,
-			ModelVersion: p.embeddingCfg.Model,
-			UserID:       item.UserID,
-			OrgTag:       item.OrgTag,
-			IsPublic:     item.IsPublic,
+			VectorID:        taskIdentity(task) + "_" + strconv.Itoa(item.ChunkID),
+			FileMD5:         item.FileMD5,
+			DocumentVersion: item.DocumentVersion,
+			ChunkID:         item.ChunkID,
+			TextContent:     item.TextContent,
+			Vector:          vector,
+			ModelVersion:    p.embeddingCfg.Model,
+			UserID:          item.UserID,
+			OrgTag:          item.OrgTag,
+			IsPublic:        item.IsPublic,
+			Modality:        item.Modality,
+			Page:            item.Page,
+			Slide:           item.Slide,
+			Sheet:           item.Sheet,
+			EvidenceIDs:     item.EvidenceIDs,
+			BBox:            item.BBox,
 		})
 	}
 
@@ -404,13 +431,18 @@ func (p *Processor) processIndex(ctx context.Context, task tasks.FileProcessingT
 	}
 
 	_ = database.RDB.Del(ctx, cacheKey).Err()
-	_ = storage.MinioClient.RemoveObject(ctx, p.minioCfg.BucketName, p.parsedObjectName(task.FileMD5), minio.RemoveObjectOptions{})
+	_ = storage.MinioClient.RemoveObject(ctx, p.minioCfg.BucketName, p.parsedObjectName(taskIdentity(task)), minio.RemoveObjectOptions{})
 	log.Infof("[Processor][index] done file=%s docs=%d", task.FileMD5, len(docs))
 	return nil
 }
 
 // processParseExternal delegates parse-stage execution to the external ingestion worker.
 func (p *Processor) processParseExternal(ctx context.Context, task tasks.FileProcessingTask) error {
+	var err error
+	task, err = p.ensureTaskVersion(ctx, task, nil)
+	if err != nil {
+		return fmt.Errorf("parse: create document version failed: %w", err)
+	}
 	objectURL := task.ObjectURL
 	if strings.TrimSpace(objectURL) == "" {
 		objectName := objectpath.MergedObjectName(task.FileMD5, task.FileName)
@@ -427,6 +459,9 @@ func (p *Processor) processParseExternal(ctx context.Context, task tasks.FilePro
 	}
 	if len(parsedDocument.Chunks) == 0 {
 		return errors.New("parse: structured document has no chunks")
+	}
+	if parsedDocument.DocumentVersion != task.DocumentVersion {
+		return fmt.Errorf("parse: worker returned document version %q, expected %q", parsedDocument.DocumentVersion, task.DocumentVersion)
 	}
 
 	parsedObject := p.parsedObjectName(task.DocumentVersion)
@@ -487,24 +522,24 @@ func (p *Processor) processChunkExternal(ctx context.Context, task tasks.FilePro
 	if len(chunks) == 0 {
 		return errors.New("chunk: no chunks generated")
 	}
-
-	if err := p.docVectorRepo.DeleteByFileMD5(task.FileMD5); err != nil {
-		log.Warnf("[Processor][chunk] clear old chunks failed file=%s err=%v", task.FileMD5, err)
+	if parsedDocument.DocumentVersion != task.DocumentVersion {
+		return fmt.Errorf("chunk: parsed document version %q does not match task version %q", parsedDocument.DocumentVersion, task.DocumentVersion)
 	}
-	_ = database.RDB.Del(ctx, p.embeddingCacheKey(task.FileMD5)).Err()
-
-	dbVectors := make([]*model.DocumentVector, 0, len(chunks))
-	for i, chunk := range chunks {
-		dbVectors = append(dbVectors, &model.DocumentVector{
-			FileMD5:      task.FileMD5,
-			ChunkID:      i,
-			TextContent:  chunk.Text,
-			ModelVersion: p.embeddingCfg.Model,
-			UserID:       task.UserID,
-			OrgTag:       task.OrgTag,
-			IsPublic:     task.IsPublic,
-		})
+	if p.evidenceRepo == nil {
+		return errors.New("chunk: evidence repository is not configured")
 	}
+	if err := p.evidenceRepo.ReplaceForVersion(task.DocumentVersion, parsedDocument.EvidenceUnits); err != nil {
+		return fmt.Errorf("chunk: persist evidence failed: %w", err)
+	}
+
+	dbVectors, err := buildStructuredVectors(task, parsedDocument, chunks, p.embeddingCfg.Model)
+	if err != nil {
+		return fmt.Errorf("chunk: build versioned vectors failed: %w", err)
+	}
+	if err := p.docVectorRepo.DeleteByDocumentVersion(task.DocumentVersion); err != nil {
+		log.Warnf("[Processor][chunk] clear old chunks version=%s err=%v", task.DocumentVersion, err)
+	}
+	_ = database.RDB.Del(ctx, p.embeddingCacheKey(task.DocumentVersion)).Err()
 	if err := p.docVectorRepo.BatchCreate(dbVectors); err != nil {
 		return fmt.Errorf("chunk: persist chunks failed: %w", err)
 	}
@@ -524,14 +559,17 @@ func (p *Processor) processChunkExternal(ctx context.Context, task tasks.FilePro
 
 // processEmbedExternal delegates embedding-stage execution to the external ingestion worker.
 func (p *Processor) processEmbedExternal(ctx context.Context, task tasks.FileProcessingTask) error {
-	cacheKey := p.embeddingCacheKey(task.FileMD5)
+	if task.DocumentVersion == "" {
+		return errors.New("embed: document version is required")
+	}
+	cacheKey := p.embeddingCacheKey(task.DocumentVersion)
 	if err := p.ensureEmbeddingHashCache(ctx, cacheKey); err != nil {
 		return fmt.Errorf("embed: prepare cache failed: %w", err)
 	}
 
 	totalChunks := task.TotalChunks
 	if totalChunks <= 0 {
-		count, err := p.docVectorRepo.CountByFileMD5(task.FileMD5)
+		count, err := p.docVectorRepo.CountByDocumentVersion(task.DocumentVersion)
 		if err != nil {
 			return fmt.Errorf("embed: count chunks failed: %w", err)
 		}
@@ -555,7 +593,7 @@ func (p *Processor) processEmbedExternal(ctx context.Context, task tasks.FilePro
 	if remaining < limit {
 		limit = remaining
 	}
-	savedVectors, err := p.docVectorRepo.FindByFileMD5Range(task.FileMD5, chunkStart, limit)
+	savedVectors, err := p.docVectorRepo.FindByDocumentVersionRange(task.DocumentVersion, chunkStart, limit)
 	if err != nil {
 		return fmt.Errorf("embed: load chunk range failed start=%d limit=%d: %w", chunkStart, limit, err)
 	}
@@ -648,8 +686,11 @@ func (p *Processor) processEmbedExternal(ctx context.Context, task tasks.FilePro
 // processIndexExternal delegates index-stage execution to the external ingestion worker.
 func (p *Processor) processIndexExternal(ctx context.Context, task tasks.FileProcessingTask) error {
 	log.Infof("[Processor][index] start file=%s worker=external", task.FileMD5)
+	if task.DocumentVersion == "" {
+		return errors.New("index: document version is required")
+	}
 
-	savedVectors, err := p.docVectorRepo.FindByFileMD5(task.FileMD5)
+	savedVectors, err := p.docVectorRepo.FindByDocumentVersion(task.DocumentVersion)
 	if err != nil {
 		return fmt.Errorf("index: load chunks failed: %w", err)
 	}
@@ -657,7 +698,7 @@ func (p *Processor) processIndexExternal(ctx context.Context, task tasks.FilePro
 		return errors.New("index: chunks are empty")
 	}
 
-	cacheKey := p.embeddingCacheKey(task.FileMD5)
+	cacheKey := p.embeddingCacheKey(task.DocumentVersion)
 	vectorMap, err := p.loadCachedEmbeddingMap(ctx, cacheKey)
 	if err != nil {
 		return fmt.Errorf("index: read cached vectors failed: %w", err)
@@ -673,15 +714,22 @@ func (p *Processor) processIndexExternal(ctx context.Context, task tasks.FilePro
 			return fmt.Errorf("index: missing vector for chunk=%d", item.ChunkID)
 		}
 		docs = append(docs, model.EsDocument{
-			VectorID:     task.FileMD5 + "_" + strconv.Itoa(item.ChunkID),
-			FileMD5:      item.FileMD5,
-			ChunkID:      item.ChunkID,
-			TextContent:  item.TextContent,
-			Vector:       vector,
-			ModelVersion: p.embeddingCfg.Model,
-			UserID:       item.UserID,
-			OrgTag:       item.OrgTag,
-			IsPublic:     item.IsPublic,
+			VectorID:        task.DocumentVersion + "_" + strconv.Itoa(item.ChunkID),
+			FileMD5:         item.FileMD5,
+			DocumentVersion: item.DocumentVersion,
+			ChunkID:         item.ChunkID,
+			TextContent:     item.TextContent,
+			Vector:          vector,
+			ModelVersion:    p.embeddingCfg.Model,
+			UserID:          item.UserID,
+			OrgTag:          item.OrgTag,
+			IsPublic:        item.IsPublic,
+			Modality:        item.Modality,
+			Page:            item.Page,
+			Slide:           item.Slide,
+			Sheet:           item.Sheet,
+			EvidenceIDs:     item.EvidenceIDs,
+			BBox:            item.BBox,
 		})
 	}
 
@@ -690,7 +738,7 @@ func (p *Processor) processIndexExternal(ctx context.Context, task tasks.FilePro
 	}
 
 	_ = database.RDB.Del(ctx, cacheKey).Err()
-	_ = storage.MinioClient.RemoveObject(ctx, p.minioCfg.BucketName, p.parsedObjectName(task.FileMD5), minio.RemoveObjectOptions{})
+	_ = storage.MinioClient.RemoveObject(ctx, p.minioCfg.BucketName, p.parsedObjectName(task.DocumentVersion), minio.RemoveObjectOptions{})
 	log.Infof("[Processor][index] done file=%s docs=%d worker=external", task.FileMD5, len(docs))
 	return nil
 }
@@ -788,7 +836,83 @@ func (p *Processor) embeddingCacheKey(fileMD5 string) string {
 
 // parsedObjectName handles parsed object name.
 func (p *Processor) parsedObjectName(fileMD5 string) string {
-	return "parsed/" + fileMD5 + ".txt"
+	return "parsed/" + fileMD5 + ".json"
+}
+
+func taskIdentity(task tasks.FileProcessingTask) string {
+	if strings.TrimSpace(task.DocumentVersion) != "" {
+		return task.DocumentVersion
+	}
+	return task.FileMD5
+}
+
+func (p *Processor) findVectors(task tasks.FileProcessingTask) ([]*model.DocumentVector, error) {
+	if task.DocumentVersion != "" {
+		return p.docVectorRepo.FindByDocumentVersion(task.DocumentVersion)
+	}
+	return p.docVectorRepo.FindByFileMD5(task.FileMD5)
+}
+
+func (p *Processor) findVectorRange(task tasks.FileProcessingTask, offset, limit int) ([]*model.DocumentVector, error) {
+	if task.DocumentVersion != "" {
+		return p.docVectorRepo.FindByDocumentVersionRange(task.DocumentVersion, offset, limit)
+	}
+	return p.docVectorRepo.FindByFileMD5Range(task.FileMD5, offset, limit)
+}
+
+func (p *Processor) countVectors(task tasks.FileProcessingTask) (int64, error) {
+	if task.DocumentVersion != "" {
+		return p.docVectorRepo.CountByDocumentVersion(task.DocumentVersion)
+	}
+	return p.docVectorRepo.CountByFileMD5(task.FileMD5)
+}
+
+func (p *Processor) deleteVectors(task tasks.FileProcessingTask) error {
+	if task.DocumentVersion != "" {
+		return p.docVectorRepo.DeleteByDocumentVersion(task.DocumentVersion)
+	}
+	return p.docVectorRepo.DeleteByFileMD5(task.FileMD5)
+}
+
+// ensureTaskVersion creates the immutable version before parse/chunk work starts.
+// The checksum remains upload metadata; all derived artifacts use the version ID.
+func (p *Processor) ensureTaskVersion(ctx context.Context, task tasks.FileProcessingTask, contents []byte) (tasks.FileProcessingTask, error) {
+	if strings.TrimSpace(task.DocumentVersion) != "" {
+		return task, nil
+	}
+	if p.documentVersionRepo == nil {
+		return task, errors.New("document version repository is not configured")
+	}
+	if len(contents) == 0 {
+		objectName := objectpath.MergedObjectName(task.FileMD5, task.FileName)
+		object, err := storage.MinioClient.GetObject(ctx, p.minioCfg.BucketName, objectName, minio.GetObjectOptions{})
+		if err != nil {
+			return task, fmt.Errorf("download merged object: %w", err)
+		}
+		defer object.Close()
+		contents, err = io.ReadAll(object)
+		if err != nil {
+			return task, fmt.Errorf("read merged object: %w", err)
+		}
+	}
+	if len(contents) == 0 {
+		return task, errors.New("merged object is empty")
+	}
+	source := model.DocumentSource{
+		SourceID:          "upload:" + task.FileMD5,
+		FileName:          task.FileName,
+		OwnerID:           strconv.FormatUint(uint64(task.UserID), 10),
+		Organization:      task.OrgTag,
+		IsPublic:          task.IsPublic,
+		OriginalObjectKey: objectpath.MergedObjectName(task.FileMD5, task.FileName),
+		FileMD5:           task.FileMD5,
+	}
+	version, err := p.documentVersionRepo.CreateForUpload(source, contents, "structured-ingestion", "1")
+	if err != nil {
+		return task, err
+	}
+	task.DocumentVersion = version.DocumentVersionID
+	return task, nil
 }
 
 // embedWindowChunks handles embed window chunks.

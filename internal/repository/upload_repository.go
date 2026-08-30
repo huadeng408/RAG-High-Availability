@@ -4,8 +4,8 @@ package repository
 import (
 	"context"
 	"github.com/go-redis/redis/v8"
-	"gorm.io/gorm"
 	"github.com/huadeng408/RAG-High-Availability/internal/model"
+	"gorm.io/gorm"
 	"strconv"
 )
 
@@ -28,6 +28,7 @@ type UploadRepository interface {
 	UpsertChunkInfoRecord(record *model.ChunkInfo) error
 	GetChunkInfoRecords(fileMD5 string) ([]model.ChunkInfo, error)
 	GetChunkInfoRecord(fileMD5 string, chunkIndex int) (*model.ChunkInfo, error)
+	DeleteChunkInfoByFileMD5(fileMD5 string) error
 
 	// Chunk status operations (Redis)
 	IsChunkUploaded(ctx context.Context, fileMD5 string, userID uint, chunkIndex int) (bool, error)
@@ -107,6 +108,11 @@ func (r *uploadRepository) GetChunkInfoRecord(fileMD5 string, chunkIndex int) (*
 		return nil, err
 	}
 	return &chunk, nil
+}
+
+// DeleteChunkInfoByFileMD5 deletes all chunk metadata for one file.
+func (r *uploadRepository) DeleteChunkInfoByFileMD5(fileMD5 string) error {
+	return r.db.Where("file_md5 = ?", fileMD5).Delete(&model.ChunkInfo{}).Error
 }
 
 // FindFilesByUserID 查找指定用户上传的所有文件。

@@ -34,3 +34,21 @@ func TestGetOrStartUsesVersionStageAndWindowAsIdentity(t *testing.T) {
 		t.Fatalf("duplicate task IDs: %d %d", first.ID, second.ID)
 	}
 }
+
+func TestMarkRetryByKeyPersistsNextAttemptAndFinalError(t *testing.T) {
+	repo := newSQLitePipelineTaskRepo(t)
+	count, err := repo.MarkRetryByKey("version-1", "parse", "root", "mineru unavailable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("retry count = %d, want 1", count)
+	}
+	task, err := repo.GetOrStart("version-1", "parse", "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.LastError != "mineru unavailable" || task.NextAttemptAt == nil {
+		t.Fatalf("retry state not persisted: %#v", task)
+	}
+}
