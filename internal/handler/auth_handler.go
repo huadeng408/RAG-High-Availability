@@ -4,8 +4,8 @@ package handler
 import (
 	"github.com/gin-gonic/gin"
 	"net/http"
-	"pai-smart-go/internal/service"
-	"pai-smart-go/pkg/log"
+	"github.com/huadeng408/RAG-High-Availability/internal/service"
+	"github.com/huadeng408/RAG-High-Availability/pkg/log"
 )
 
 // AuthHandler 负责处理认证相关的 API 请求，例如刷新 token。

@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"pai-smart-go/internal/config"
-	"pai-smart-go/internal/model"
-	"pai-smart-go/internal/repository"
-	"pai-smart-go/pkg/log"
-	"pai-smart-go/pkg/reranker"
+	"github.com/huadeng408/RAG-High-Availability/internal/config"
+	"github.com/huadeng408/RAG-High-Availability/internal/model"
+	"github.com/huadeng408/RAG-High-Availability/internal/repository"
+	"github.com/huadeng408/RAG-High-Availability/pkg/log"
+	"github.com/huadeng408/RAG-High-Availability/pkg/reranker"
 )
 
 // OrchestratorSupportService exposes retrieval and persistence helpers used by the external LangGraph service.

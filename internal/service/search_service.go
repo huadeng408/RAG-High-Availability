@@ -15,12 +15,12 @@ import (
 	"sync"
 	"time"
 
-	"pai-smart-go/internal/config"
-	"pai-smart-go/internal/model"
-	"pai-smart-go/internal/repository"
-	"pai-smart-go/pkg/embedding"
-	"pai-smart-go/pkg/log"
-	"pai-smart-go/pkg/reranker"
+	"github.com/huadeng408/RAG-High-Availability/internal/config"
+	"github.com/huadeng408/RAG-High-Availability/internal/model"
+	"github.com/huadeng408/RAG-High-Availability/internal/repository"
+	"github.com/huadeng408/RAG-High-Availability/pkg/embedding"
+	"github.com/huadeng408/RAG-High-Availability/pkg/log"
+	"github.com/huadeng408/RAG-High-Availability/pkg/reranker"
 
 	"github.com/elastic/go-elasticsearch/v8"
 )

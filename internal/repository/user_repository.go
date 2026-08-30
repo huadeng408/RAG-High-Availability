@@ -3,7 +3,7 @@ package repository
 
 import (
 	"gorm.io/gorm"
-	"pai-smart-go/internal/model"
+	"github.com/huadeng408/RAG-High-Availability/internal/model"
 )
 
 // UserRepository 接口定义了用户数据的持久化操作。

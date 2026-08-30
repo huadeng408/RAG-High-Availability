@@ -5,7 +5,7 @@ import (
 	"context"
 	"github.com/go-redis/redis/v8"
 	"gorm.io/gorm"
-	"pai-smart-go/internal/model"
+	"github.com/huadeng408/RAG-High-Availability/internal/model"
 	"strconv"
 )
 

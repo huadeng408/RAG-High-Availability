@@ -352,7 +352,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default="http://127.0.0.1:8081")
     parser.add_argument("--username", default="upload_bench_user")
-    parser.add_argument("--password", default="PaismartUpload!2026")
+    parser.add_argument("--password", default="RHAUpload!2026")
     parser.add_argument("--count", type=int, default=120)
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--out", default="benchmarks/results/upload-baguwen-benchmark.json")

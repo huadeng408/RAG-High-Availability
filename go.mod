@@ -1,4 +1,4 @@
-module pai-smart-go
+module github.com/huadeng408/RAG-High-Availability
 
 go 1.23.0
 

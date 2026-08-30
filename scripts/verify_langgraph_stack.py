@@ -72,7 +72,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--go-base-url", default="http://127.0.0.1:8081")
     parser.add_argument("--orchestrator-base-url", default="http://127.0.0.1:8090")
-    parser.add_argument("--internal-token", default="paismart-internal-dev")
+    parser.add_argument("--internal-token", default="rha-internal-dev")
     parser.add_argument("--user-id", type=int, default=0)
     parser.add_argument("--username", default="smoke-user")
     parser.add_argument("--query", default="请概括当前知识库系统的混合检索流程")

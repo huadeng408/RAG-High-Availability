@@ -86,7 +86,7 @@ def main():
     image = Image.new("RGB", (WIDTH, HEIGHT), "white")
     draw = ImageDraw.Draw(image)
 
-    draw.text((60, 28), "PaiSmart LangGraph / LangChain 中文架构图", font=FONT_TITLE, fill="#111827")
+    draw.text((60, 28), "RHA LangGraph / LangChain 中文架构图", font=FONT_TITLE, fill="#111827")
     draw.text((62, 86), "适合面试讲解的职责分层版本", font=FONT_SMALL, fill="#6B7280")
 
     draw_section(draw, 40, 140, 420, 320, "客户端层", *COLORS["client"])

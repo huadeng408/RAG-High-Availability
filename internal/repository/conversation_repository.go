@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"pai-smart-go/internal/model"
+	"github.com/huadeng408/RAG-High-Availability/internal/model"
 	"time"
 
 	"github.com/go-redis/redis/v8"

@@ -1,4 +1,4 @@
-# PaiSmart LangGraph Orchestrator
+# RHA LangGraph Orchestrator
 
 This service externalizes the online AI orchestration layer from the Go monolith.
 
@@ -21,9 +21,9 @@ ai-orchestrator\.venv\Scripts\python.exe -m pip install -r ai-orchestrator\requi
 3. Start the service:
 
 ```powershell
-$env:PAISMART_INTERNAL_TOKEN="paismart-internal-dev"
-$env:PAISMART_GO_BASE_URL="http://127.0.0.1:8081"
-$env:PAISMART_LLM_API_KEY="replace-me"
+$env:RHA_INTERNAL_TOKEN="rha-internal-dev"
+$env:RHA_GO_BASE_URL="http://127.0.0.1:8081"
+$env:RHA_LLM_API_KEY="replace-me"
 ai-orchestrator\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir ai-orchestrator --host 0.0.0.0 --port 8090
 ```
 
@@ -37,7 +37,7 @@ ai:
     base_url: "http://127.0.0.1:8090"
     timeout_ms: 120000
     ingestion_timeout_ms: 180000
-    shared_secret: "paismart-internal-dev"
+    shared_secret: "rha-internal-dev"
 ```
 
 ## Internal contract
@@ -73,7 +73,7 @@ The Go memory subsystem also calls these Python-only endpoints:
 python scripts/verify_langgraph_stack.py `
   --go-base-url http://127.0.0.1:8081 `
   --orchestrator-base-url http://127.0.0.1:8090 `
-  --internal-token paismart-internal-dev `
+  --internal-token rha-internal-dev `
   --user-id 1 `
   --username admin `
   --out benchmarks/results/langgraph-stack-smoke.json

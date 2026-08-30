@@ -3,8 +3,8 @@ package service
 
 import (
 	"context"
-	"pai-smart-go/internal/model"
-	"pai-smart-go/internal/repository"
+	"github.com/huadeng408/RAG-High-Availability/internal/model"
+	"github.com/huadeng408/RAG-High-Availability/internal/repository"
 	"time"
 )
 

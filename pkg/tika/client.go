@@ -7,7 +7,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"pai-smart-go/internal/config"
+	"github.com/huadeng408/RAG-High-Availability/internal/config"
 	"path/filepath"
 )
 

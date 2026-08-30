@@ -1,6 +1,6 @@
-# PaiSmart 项目全景架构图 / Project Architecture
+# RHA 项目全景架构图 / Project Architecture
 
-下面这张图展示了 PaiSmart 的主要功能模块、调用关系和基础设施依赖。节点统一采用中英文双语标注，便于作为项目说明、团队协作和架构沟通的参考。
+下面这张图展示了 RHA 的主要功能模块、调用关系和基础设施依赖。节点统一采用中英文双语标注，便于作为项目说明、团队协作和架构沟通的参考。
 
 ```mermaid
 flowchart TB

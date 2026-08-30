@@ -6,8 +6,8 @@ import time
 import uuid
 
 
-_trace_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("paismart_trace_id", default="")
-logger = logging.getLogger("paismart.orchestrator")
+_trace_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("rha_trace_id", default="")
+logger = logging.getLogger("rha.orchestrator")
 
 
 def configure_logging() -> None:

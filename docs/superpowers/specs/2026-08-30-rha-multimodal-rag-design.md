@@ -10,7 +10,7 @@ The implementation must provide the capabilities described here without assertin
 
 ### In Scope
 
-- Replace every tracked repository use of `Paismart` or `pai-smart` with `RHA` or `rha`, including the Go module path, infrastructure resource names, configuration, documentation, frontend copy, and runtime logs.
+- Replace every tracked legacy product name with `RHA` or `rha`, including the Go module path, infrastructure resource names, configuration, documentation, frontend copy, and runtime logs.
 - Replace flat parsed-text ingestion contracts with versioned structured document, chunk, evidence, retrieval-hit, citation, task, and trace contracts shared by Go and Python.
 - Require MinerU plus OCR for production PDF parsing. Do not retain Tika as a PDF parsing fallback.
 - Support structural chunking for PDF pages, Word headings, PowerPoint slides, and Excel sheets with header-aware row windows.
@@ -22,7 +22,7 @@ The implementation must provide the capabilities described here without assertin
 
 ### Explicitly Out Of Scope
 
-- Backward compatibility with PaiSmart database rows, Elasticsearch indices, Kafka topics, object names, Docker images, Go imports, or runtime configuration.
+- Backward compatibility with RHA database rows, Elasticsearch indices, Kafka topics, object names, Docker images, Go imports, or runtime configuration.
 - Destructive deletion of existing data, indexes, volumes, or user-created local artifacts.
 - Claiming benchmark success rates, merge latency, retrieval quality, or high availability before a separately recorded benchmark establishes them.
 - Transplanting the entire `/mnt/d/vscode/localcode` repository or duplicating its gateway, persistence, and product layers.
@@ -41,7 +41,7 @@ The Go module becomes `github.com/huadeng408/RAG-High-Availability`. All interna
 | Evidence read alias | `rha-evidence-active` |
 | Docker services, image labels, and environment prefixes | `rha-*` and `RHA_*` |
 
-There is no runtime alias, redirect, or compatibility translator for the old names. A tracked-file case-insensitive search for `paismart|pai-smart` is a release gate and must return no matches outside Git history.
+There is no runtime alias, redirect, or compatibility translator for the old names. A tracked-file case-insensitive search for `rha|rha` is a release gate and must return no matches outside Git history.
 
 ## Domain Contracts
 
@@ -111,7 +111,7 @@ The test suite must prove the following with real contract code rather than asse
 - duplicate stage deliveries preserve one task record per version/stage/window;
 - retry limit sends the selected task to the RHA DLQ and replay restores it;
 - vector/embedding and reranker failures degrade to BM25/fused hits as specified;
-- alias switch uses the two RHA aliases and never targets a PaiSmart index;
+- alias switch uses the two RHA aliases and never targets a RHA index;
 - Go/Python contracts propagate trace ID and structured citations through the streaming terminal event.
 
 The Docker-backed E2E stack starts RHA's Go service, Python orchestrator, MySQL, Redis, Kafka, MinIO, Elasticsearch, and deterministic test model/ingestion services. It uploads the fixture corpus, waits for each version to become searchable, issues an authenticated query, and asserts an RHA citation with page coordinates. This proves a local capability path only. A separate benchmark command may report results only when its raw result artifact, configuration, timestamps, and corpus hash are checked in or retained as a release artifact.

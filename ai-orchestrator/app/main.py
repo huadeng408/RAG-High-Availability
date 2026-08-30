@@ -47,7 +47,7 @@ ingestion_service = IngestionService(settings)
 memory_task_service = MemoryTaskService(settings)
 graph = build_graph(settings, backend)
 
-app = FastAPI(title="PaiSmart LangGraph Orchestrator", version="0.1.0")
+app = FastAPI(title="RHA LangGraph Orchestrator", version="0.1.0")
 
 
 @app.middleware("http")

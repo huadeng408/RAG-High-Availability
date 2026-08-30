@@ -34,10 +34,10 @@ flowchart TB
     R --> T4
 
     subgraph Consumers["按 Stage 独立消费"]
-        C1["Consumer Group<br/>paismart-go-parse"]
-        C2["Consumer Group<br/>paismart-go-chunk"]
-        C3["Consumer Group<br/>paismart-go-embed"]
-        C4["Consumer Group<br/>paismart-go-index"]
+        C1["Consumer Group<br/>rha-go-parse"]
+        C2["Consumer Group<br/>rha-go-chunk"]
+        C3["Consumer Group<br/>rha-go-embed"]
+        C4["Consumer Group<br/>rha-go-index"]
     end
 
     T1 --> C1

@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"pai-smart-go/internal/model"
-	"pai-smart-go/internal/repository"
-	"pai-smart-go/pkg/kafka"
-	"pai-smart-go/pkg/tasks"
+	"github.com/huadeng408/RAG-High-Availability/internal/model"
+	"github.com/huadeng408/RAG-High-Availability/internal/repository"
+	"github.com/huadeng408/RAG-High-Availability/pkg/kafka"
+	"github.com/huadeng408/RAG-High-Availability/pkg/tasks"
 
 	"gorm.io/gorm"
 )

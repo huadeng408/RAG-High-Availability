@@ -1,1 +1,1 @@
-"""LangGraph-based AI orchestrator for PaiSmart."""
+"""LangGraph-based AI orchestrator for RHA."""

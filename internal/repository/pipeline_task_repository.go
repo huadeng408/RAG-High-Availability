@@ -4,7 +4,7 @@ package repository
 import (
 	"errors"
 	"fmt"
-	"pai-smart-go/internal/model"
+	"github.com/huadeng408/RAG-High-Availability/internal/model"
 
 	"gorm.io/gorm"
 )

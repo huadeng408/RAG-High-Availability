@@ -3,13 +3,13 @@ package handler
 
 import (
 	"net/http"
-	"pai-smart-go/internal/service"
-	"pai-smart-go/pkg/log"
+	"github.com/huadeng408/RAG-High-Availability/internal/service"
+	"github.com/huadeng408/RAG-High-Availability/pkg/log"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"pai-smart-go/internal/model"
+	"github.com/huadeng408/RAG-High-Availability/internal/model"
 )
 
 // UserHandler 负责处理所有与普通用户相关的 API 请求。

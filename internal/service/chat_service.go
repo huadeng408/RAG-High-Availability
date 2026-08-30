@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"pai-smart-go/internal/config"
-	"pai-smart-go/internal/model"
-	"pai-smart-go/internal/repository"
-	"pai-smart-go/pkg/log"
-	orchestratorclient "pai-smart-go/pkg/orchestrator"
+	"github.com/huadeng408/RAG-High-Availability/internal/config"
+	"github.com/huadeng408/RAG-High-Availability/internal/model"
+	"github.com/huadeng408/RAG-High-Availability/internal/repository"
+	"github.com/huadeng408/RAG-High-Availability/pkg/log"
+	orchestratorclient "github.com/huadeng408/RAG-High-Availability/pkg/orchestrator"
 
 	"github.com/gorilla/websocket"
 )

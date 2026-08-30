@@ -3,8 +3,8 @@ package storage
 
 import (
 	"context"
-	"pai-smart-go/internal/config"
-	"pai-smart-go/pkg/log"
+	"github.com/huadeng408/RAG-High-Availability/internal/config"
+	"github.com/huadeng408/RAG-High-Availability/pkg/log"
 	"time"
 
 	"github.com/minio/minio-go/v7"

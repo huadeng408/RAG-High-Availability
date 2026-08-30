@@ -4,7 +4,7 @@ package database
 import (
 	"context"
 	"github.com/go-redis/redis/v8"
-	"pai-smart-go/pkg/log"
+	"github.com/huadeng408/RAG-High-Availability/pkg/log"
 )
 
 // RDB stores the shared Redis client.

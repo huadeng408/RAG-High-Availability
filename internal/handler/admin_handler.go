@@ -3,10 +3,10 @@ package handler
 
 import (
 	"net/http"
-	"pai-smart-go/internal/service"
-	"pai-smart-go/pkg/log"
-	"pai-smart-go/pkg/tasks"
-	"pai-smart-go/pkg/token"
+	"github.com/huadeng408/RAG-High-Availability/internal/service"
+	"github.com/huadeng408/RAG-High-Availability/pkg/log"
+	"github.com/huadeng408/RAG-High-Availability/pkg/tasks"
+	"github.com/huadeng408/RAG-High-Availability/pkg/token"
 	"strconv"
 	"time"
 

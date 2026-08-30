@@ -3,7 +3,7 @@ package repository
 
 import (
 	"gorm.io/gorm"
-	"pai-smart-go/internal/model"
+	"github.com/huadeng408/RAG-High-Availability/internal/model"
 )
 
 // OrgTagRepository 接口定义了组织标签的数据操作方法。

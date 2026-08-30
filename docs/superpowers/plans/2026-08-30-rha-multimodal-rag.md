@@ -57,7 +57,7 @@ Expected: exits `1` and reports existing Go imports, config values, docs, fronte
 
 - [ ] **Step 3: Apply the complete rename.**
 
-Set the module line to `module github.com/huadeng408/RAG-High-Availability`; replace every internal `pai-smart-go/...` import with `github.com/huadeng408/RAG-High-Availability/...`; rename runtime values to the names from the spec; replace `PAISMART_*` environment references with `RHA_*`; and remove literal historical names from docs, HTML, and frontend source. Update `go.mod` imports with `go mod tidy` only after all import paths are changed.
+Set the module line to `module github.com/huadeng408/RAG-High-Availability`; replace every internal `rha-go/...` import with `github.com/huadeng408/RAG-High-Availability/...`; rename runtime values to the names from the spec; replace `RHA_*` environment references with `RHA_*`; and remove literal historical names from docs, HTML, and frontend source. Update `go.mod` imports with `go mod tidy` only after all import paths are changed.
 
 Create `AGENTS.md` with the repository-local network rule, a statement that meaningful verified changes may be committed and pushed to `origin/main`, an instruction to stage only owned files, and a prohibition on committing secrets or generated runtime artifacts.
 

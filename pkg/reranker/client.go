@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"pai-smart-go/internal/config"
+	"github.com/huadeng408/RAG-High-Availability/internal/config"
 )
 
 // Document represents a document.

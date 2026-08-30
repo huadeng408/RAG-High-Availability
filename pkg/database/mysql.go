@@ -4,7 +4,7 @@ package database
 import (
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
-	"pai-smart-go/pkg/log"
+	"github.com/huadeng408/RAG-High-Availability/pkg/log"
 	"time"
 )
 

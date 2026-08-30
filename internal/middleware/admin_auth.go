@@ -4,7 +4,7 @@ package middleware
 import (
 	"github.com/gin-gonic/gin"
 	"net/http"
-	"pai-smart-go/internal/model"
+	"github.com/huadeng408/RAG-High-Availability/internal/model"
 )
 
 // AdminAuthMiddleware 检查用户是否具有管理员权限。

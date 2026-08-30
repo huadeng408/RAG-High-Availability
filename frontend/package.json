@@ -2,20 +2,20 @@
   "name": "pi-smart",
   "type": "module",
   "version": "1.3.13",
-  "description": "PaiSmart",
+  "description": "RHA",
   "author": {
-    "name": "PaiSmart",
-    "url": "https://github.com/itwanger/PaiSmart.git"
+    "name": "RHA",
+    "url": "https://github.com/itwanger/RHA.git"
   },
   "license": "MIT",
-  "homepage": "https://github.com/itwanger/PaiSmart.git",
+  "homepage": "https://github.com/itwanger/RHA.git",
   "repository": {
-    "url": "https://github.com/itwanger/PaiSmart.git"
+    "url": "https://github.com/itwanger/RHA.git"
   },
   "bugs": {
-    "url": "https://github.com/itwanger/PaiSmart/issues"
+    "url": "https://github.com/itwanger/RHA/issues"
   },
-  "keywords": ["ai", "rag", "llm", "chat", "itwanger", "pai-smart"],
+  "keywords": ["ai", "rag", "llm", "chat", "itwanger", "rha"],
   "engines": {
     "node": ">=18.20.0",
     "pnpm": ">=8.7.0"
@@ -110,5 +110,5 @@
     "commit-msg": "pnpm sa git-commit-verify",
     "pre-commit": "cd frontend && pnpm typecheck && pnpm lint && git diff --exit-code"
   },
-  "website": "https://github.com/itwanger/PaiSmart.git"
+  "website": "https://github.com/itwanger/RHA.git"
 }

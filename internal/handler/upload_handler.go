@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"pai-smart-go/internal/service"
-	"pai-smart-go/pkg/log"
-	"pai-smart-go/pkg/token"
+	"github.com/huadeng408/RAG-High-Availability/internal/service"
+	"github.com/huadeng408/RAG-High-Availability/pkg/log"
+	"github.com/huadeng408/RAG-High-Availability/pkg/token"
 
 	"github.com/gin-gonic/gin"
 )

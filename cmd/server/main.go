@@ -16,30 +16,30 @@ import (
 	"syscall"
 	"time"
 
-	"pai-smart-go/internal/config"
-	"pai-smart-go/internal/handler"
-	"pai-smart-go/internal/middleware"
-	"pai-smart-go/internal/model"
-	"pai-smart-go/internal/pipeline"
-	"pai-smart-go/internal/repository"
-	"pai-smart-go/internal/service"
-	"pai-smart-go/pkg/database"
-	"pai-smart-go/pkg/embedding"
-	"pai-smart-go/pkg/es"
-	"pai-smart-go/pkg/kafka"
-	"pai-smart-go/pkg/log"
-	"pai-smart-go/pkg/orchestrator"
-	"pai-smart-go/pkg/reranker"
-	"pai-smart-go/pkg/storage"
-	"pai-smart-go/pkg/tika"
-	"pai-smart-go/pkg/token"
+	"github.com/huadeng408/RAG-High-Availability/internal/config"
+	"github.com/huadeng408/RAG-High-Availability/internal/handler"
+	"github.com/huadeng408/RAG-High-Availability/internal/middleware"
+	"github.com/huadeng408/RAG-High-Availability/internal/model"
+	"github.com/huadeng408/RAG-High-Availability/internal/pipeline"
+	"github.com/huadeng408/RAG-High-Availability/internal/repository"
+	"github.com/huadeng408/RAG-High-Availability/internal/service"
+	"github.com/huadeng408/RAG-High-Availability/pkg/database"
+	"github.com/huadeng408/RAG-High-Availability/pkg/embedding"
+	"github.com/huadeng408/RAG-High-Availability/pkg/es"
+	"github.com/huadeng408/RAG-High-Availability/pkg/kafka"
+	"github.com/huadeng408/RAG-High-Availability/pkg/log"
+	"github.com/huadeng408/RAG-High-Availability/pkg/orchestrator"
+	"github.com/huadeng408/RAG-High-Availability/pkg/reranker"
+	"github.com/huadeng408/RAG-High-Availability/pkg/storage"
+	"github.com/huadeng408/RAG-High-Availability/pkg/tika"
+	"github.com/huadeng408/RAG-High-Availability/pkg/token"
 
 	"github.com/gin-gonic/gin"
 )
 
 // main bootstraps infrastructure dependencies and starts the HTTP server.
 func main() {
-	configPath := strings.TrimSpace(os.Getenv("PAISMART_CONFIG"))
+	configPath := strings.TrimSpace(os.Getenv("RHA_CONFIG"))
 	if configPath == "" {
 		configPath = "./configs/config.yaml"
 	}

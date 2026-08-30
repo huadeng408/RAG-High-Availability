@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"pai-smart-go/internal/config"
+	"github.com/huadeng408/RAG-High-Availability/internal/config"
 
 	"github.com/gin-gonic/gin"
 )

@@ -5,16 +5,16 @@ import (
 	"context"
 	"errors"
 	"net/url"
-	"pai-smart-go/internal/config"
-	"pai-smart-go/internal/model"
-	"pai-smart-go/internal/repository"
-	"pai-smart-go/pkg/objectpath"
-	"pai-smart-go/pkg/storage"
+	"github.com/huadeng408/RAG-High-Availability/internal/config"
+	"github.com/huadeng408/RAG-High-Availability/internal/model"
+	"github.com/huadeng408/RAG-High-Availability/internal/repository"
+	"github.com/huadeng408/RAG-High-Availability/pkg/objectpath"
+	"github.com/huadeng408/RAG-High-Availability/pkg/storage"
 	"strings"
 	"time"
 
 	"github.com/minio/minio-go/v7"
-	"pai-smart-go/pkg/tika"
+	"github.com/huadeng408/RAG-High-Availability/pkg/tika"
 )
 
 // FileUploadDTO 是一个数据传输对象，用于在返回给前端时隐藏一些字段并添加额外信息。

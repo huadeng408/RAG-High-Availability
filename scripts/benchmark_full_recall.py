@@ -27,7 +27,7 @@ import pymysql
 import requests
 
 
-INTERNAL_TOKEN = "paismart-internal-dev"
+INTERNAL_TOKEN = "rha-internal-dev"
 
 
 @dataclass
@@ -431,7 +431,7 @@ def summarize(rows: list[dict]) -> dict:
 
 
 def parse_mysql_dsn(dsn: str) -> dict[str, object]:
-    # root:PaiSmart2025@tcp(127.0.0.1:3307)/PaiSmart?charset=utf8mb4&parseTime=True&loc=Local
+    # root:RHA2025@tcp(127.0.0.1:3307)/RHA?charset=utf8mb4&parseTime=True&loc=Local
     creds, rest = dsn.split("@tcp(")
     user, password = creds.split(":", 1)
     hostport, rest = rest.split(")/")
@@ -456,12 +456,12 @@ def main() -> None:
     parser.add_argument("--go-base-url", default="http://127.0.0.1:8081")
     parser.add_argument("--api-base-url", default="http://127.0.0.1:8081")
     parser.add_argument("--username", default="e2e_user_c4b8673e")
-    parser.add_argument("--password", default="PaismartE2E!2026")
+    parser.add_argument("--password", default="RHAE2E!2026")
     parser.add_argument("--user-id", type=int, default=0)
     parser.add_argument("--role", default="USER")
     parser.add_argument("--org-tags", default="PRIVATE_6")
     parser.add_argument("--primary-org", default="PRIVATE_6")
-    parser.add_argument("--mysql-dsn", default="root:PaiSmart2025@tcp(127.0.0.1:3307)/PaiSmart?charset=utf8mb4&parseTime=True&loc=Local")
+    parser.add_argument("--mysql-dsn", default="root:RHA2025@tcp(127.0.0.1:3307)/RHA?charset=utf8mb4&parseTime=True&loc=Local")
     parser.add_argument("--es-base-url", default="http://127.0.0.1:9200")
     parser.add_argument("--knowledge-index", default="knowledge_base_e2e_512")
     parser.add_argument("--memory-index", default="conversation_memory_e2e_512")

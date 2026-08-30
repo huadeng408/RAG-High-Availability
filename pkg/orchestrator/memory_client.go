@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"pai-smart-go/internal/config"
-	"pai-smart-go/internal/model"
-	"pai-smart-go/pkg/log"
+	"github.com/huadeng408/RAG-High-Availability/internal/config"
+	"github.com/huadeng408/RAG-High-Availability/internal/model"
+	"github.com/huadeng408/RAG-High-Availability/pkg/log"
 )
 
 // MemoryClient defines orchestrator-backed memory planning operations.

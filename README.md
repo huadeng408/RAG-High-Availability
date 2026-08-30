@@ -1,6 +1,6 @@
-# PaiSmart RAG 智能知识引擎
+# RHA RAG 智能知识引擎
 
-PaiSmart 是一个面向企业知识场景的私有知识库与智能问答系统，覆盖文档上传、异步解析、混合检索、多轮问答、记忆管理与后台管理等完整能力。项目采用 Go 作为主要业务服务与基础设施接入层，结合 Python `ai-orchestrator` 提供基于 LangGraph / LangChain 的在线问答编排、记忆任务和文档处理能力，适合用于企业知识库、内部问答助手、技术文档检索、制度流程查询等场景。
+RHA 是一个面向企业知识场景的私有知识库与智能问答系统，覆盖文档上传、异步解析、混合检索、多轮问答、记忆管理与后台管理等完整能力。项目采用 Go 作为主要业务服务与基础设施接入层，结合 Python `ai-orchestrator` 提供基于 LangGraph / LangChain 的在线问答编排、记忆任务和文档处理能力，适合用于企业知识库、内部问答助手、技术文档检索、制度流程查询等场景。
 
 ## 系统架构图
 
@@ -458,7 +458,7 @@ pnpm run dev
 python scripts/verify_langgraph_stack.py \
   --go-base-url http://127.0.0.1:8081 \
   --orchestrator-base-url http://127.0.0.1:8090 \
-  --internal-token paismart-internal-dev \
+  --internal-token rha-internal-dev \
   --user-id 1 \
   --username admin \
   --out benchmarks/results/langgraph-stack-smoke.json

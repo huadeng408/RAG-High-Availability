@@ -1,6 +1,6 @@
-# PaiSmart 本地联调手册
+# RHA 本地联调手册
 
-本文档用于在本机拉起 PaiSmart 的完整本地联调环境，包括：
+本文档用于在本机拉起 RHA 的完整本地联调环境，包括：
 
 - 基础依赖
 - Go 后端
@@ -30,17 +30,17 @@
 
 ## 2. 本地配置值
 
-当前本地开发默认使用 [config.yaml](/D:/vscode/paismart-go-main/configs/config.yaml)。
+当前本地开发默认使用 [config.yaml](/D:/vscode/rha-go-main/configs/config.yaml)。
 
 关键配置如下：
 
 ```yaml
 database:
   mysql:
-    dsn: "root:PaiSmart2025@tcp(127.0.0.1:3307)/PaiSmart?charset=utf8mb4&parseTime=True&loc=Local"
+    dsn: "root:RHA2025@tcp(127.0.0.1:3307)/RHA?charset=utf8mb4&parseTime=True&loc=Local"
   redis:
     addr: "127.0.0.1:6380"
-    password: "PaiSmart2025"
+    password: "RHA2025"
     db: 0
 
 minio:
@@ -66,50 +66,50 @@ ai:
     base_url: "http://127.0.0.1:8090"
     timeout_ms: 120000
     ingestion_timeout_ms: 180000
-    shared_secret: "paismart-internal-dev"
+    shared_secret: "rha-internal-dev"
 ```
 
 Python `ai-orchestrator` 需要以下环境变量：
 
 ```powershell
-$env:PAISMART_INTERNAL_TOKEN="paismart-internal-dev"
-$env:PAISMART_GO_BASE_URL="http://127.0.0.1:8081"
+$env:RHA_INTERNAL_TOKEN="rha-internal-dev"
+$env:RHA_GO_BASE_URL="http://127.0.0.1:8081"
 
-$env:PAISMART_LLM_BASE_URL="https://api.deepseek.com/v1"
-$env:PAISMART_LLM_API_KEY="<你的 LLM Key>"
-$env:PAISMART_LLM_MODEL="deepseek-chat"
-$env:PAISMART_LLM_TEMPERATURE="0.3"
-$env:PAISMART_LLM_TOP_P="0.9"
-$env:PAISMART_LLM_MAX_TOKENS="2000"
+$env:RHA_LLM_BASE_URL="https://api.deepseek.com/v1"
+$env:RHA_LLM_API_KEY="<你的 LLM Key>"
+$env:RHA_LLM_MODEL="deepseek-chat"
+$env:RHA_LLM_TEMPERATURE="0.3"
+$env:RHA_LLM_TOP_P="0.9"
+$env:RHA_LLM_MAX_TOKENS="2000"
 
-$env:PAISMART_PLANNER_BASE_URL="http://127.0.0.1:11434/v1"
-$env:PAISMART_PLANNER_API_KEY=""
-$env:PAISMART_PLANNER_MODEL="qwen3:4b"
-$env:PAISMART_PLANNER_TEMPERATURE="0.1"
-$env:PAISMART_PLANNER_MAX_TOKENS="256"
+$env:RHA_PLANNER_BASE_URL="http://127.0.0.1:11434/v1"
+$env:RHA_PLANNER_API_KEY=""
+$env:RHA_PLANNER_MODEL="qwen3:4b"
+$env:RHA_PLANNER_TEMPERATURE="0.1"
+$env:RHA_PLANNER_MAX_TOKENS="256"
 
-$env:PAISMART_EMBEDDING_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
-$env:PAISMART_EMBEDDING_API_KEY="<你的 Embedding Key>"
-$env:PAISMART_EMBEDDING_MODEL="text-embedding-v4"
-$env:PAISMART_EMBEDDING_DIMENSIONS="2048"
+$env:RHA_EMBEDDING_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
+$env:RHA_EMBEDDING_API_KEY="<你的 Embedding Key>"
+$env:RHA_EMBEDDING_MODEL="text-embedding-v4"
+$env:RHA_EMBEDDING_DIMENSIONS="2048"
 
-$env:PAISMART_TIKA_URL="http://127.0.0.1:9998"
-$env:PAISMART_ES_URL="http://127.0.0.1:9200"
-$env:PAISMART_ES_USERNAME=""
-$env:PAISMART_ES_PASSWORD=""
+$env:RHA_TIKA_URL="http://127.0.0.1:9998"
+$env:RHA_ES_URL="http://127.0.0.1:9200"
+$env:RHA_ES_USERNAME=""
+$env:RHA_ES_PASSWORD=""
 
-$env:PAISMART_RETRIEVAL_KNOWLEDGE_TOP_K="8"
-$env:PAISMART_RETRIEVAL_MEMORY_TOP_K="4"
-$env:PAISMART_RETRIEVAL_CONTEXT_TOP_K="6"
-$env:PAISMART_RETRIEVAL_RRF_K="60"
+$env:RHA_RETRIEVAL_KNOWLEDGE_TOP_K="8"
+$env:RHA_RETRIEVAL_MEMORY_TOP_K="4"
+$env:RHA_RETRIEVAL_CONTEXT_TOP_K="6"
+$env:RHA_RETRIEVAL_RRF_K="60"
 ```
 
 如果远程 Embedding Key 不可用，也可以切到本地容器：
 
 ```powershell
-$env:PAISMART_EMBEDDING_BASE_URL="http://127.0.0.1:8009"
-$env:PAISMART_EMBEDDING_API_KEY=""
-$env:PAISMART_EMBEDDING_MODEL="jinaai/jina-embeddings-v2-base-zh"
+$env:RHA_EMBEDDING_BASE_URL="http://127.0.0.1:8009"
+$env:RHA_EMBEDDING_API_KEY=""
+$env:RHA_EMBEDDING_MODEL="jinaai/jina-embeddings-v2-base-zh"
 ```
 
 ## 3. 启动顺序
@@ -210,7 +210,7 @@ http://127.0.0.1:5173
 python scripts/verify_langgraph_stack.py `
   --go-base-url http://127.0.0.1:8081 `
   --orchestrator-base-url http://127.0.0.1:8090 `
-  --internal-token paismart-internal-dev `
+  --internal-token rha-internal-dev `
   --user-id 1 `
   --username admin `
   --out benchmarks/results/langgraph-stack-smoke.json

@@ -29,7 +29,7 @@ function Start-LocalRedis {
 
     Write-Host "Starting local Redis on port $Port ..."
     Start-Process -FilePath $BinaryPath `
-        -ArgumentList @('--port', $Port, '--requirepass', 'PaiSmart2025', '--appendonly', 'yes') `
+        -ArgumentList @('--port', $Port, '--requirepass', 'RHA2025', '--appendonly', 'yes') `
         -RedirectStandardOutput (Join-Path (Get-Location) 'logs/devstable-redis.out.log') `
         -RedirectStandardError (Join-Path (Get-Location) 'logs/devstable-redis.err.log')
 }
@@ -87,37 +87,37 @@ Start-BackgroundProcess `
     -StdOut (Join-Path (Get-Location) 'logs/devstable-reranker.out.log') `
     -StdErr (Join-Path (Get-Location) 'logs/devstable-reranker.err.log')
 
-$env:PAISMART_CONFIG = $ConfigPath
+$env:RHA_CONFIG = $ConfigPath
 Start-BackgroundProcess `
     -FilePath 'go' `
     -ArgumentList @('run', 'cmd/server/main.go') `
     -StdOut (Join-Path (Get-Location) 'logs/devstable-go.out.log') `
     -StdErr (Join-Path (Get-Location) 'logs/devstable-go.err.log')
 
-$env:PAISMART_HOST = '0.0.0.0'
-$env:PAISMART_PORT = '8090'
-$env:PAISMART_GO_BASE_URL = 'http://127.0.0.1:8081'
-$env:PAISMART_INTERNAL_TOKEN = 'paismart-internal-dev'
-$env:PAISMART_REQUEST_TIMEOUT_SECONDS = '300'
-$env:PAISMART_LLM_BASE_URL = 'https://api.deepseek.com/v1'
-$env:PAISMART_LLM_API_KEY = $env:PAISMART_LLM_API_KEY
-$env:PAISMART_LLM_MODEL = 'deepseek-chat'
-$env:PAISMART_LLM_TEMPERATURE = '0.3'
-$env:PAISMART_LLM_TOP_P = '0.9'
-$env:PAISMART_LLM_MAX_TOKENS = '2000'
-$env:PAISMART_PLANNER_BASE_URL = 'https://api.deepseek.com/v1'
-$env:PAISMART_PLANNER_API_KEY = $env:PAISMART_PLANNER_API_KEY
-$env:PAISMART_PLANNER_MODEL = 'deepseek-chat'
-$env:PAISMART_PLANNER_TEMPERATURE = '0.1'
-$env:PAISMART_PLANNER_MAX_TOKENS = '256'
-$env:PAISMART_EMBEDDING_BASE_URL = 'http://127.0.0.1:18009'
-$env:PAISMART_EMBEDDING_API_KEY = ''
-$env:PAISMART_EMBEDDING_MODEL = 'BAAI/bge-small-zh-v1.5'
-$env:PAISMART_EMBEDDING_DIMENSIONS = '512'
-$env:PAISMART_TIKA_URL = 'http://127.0.0.1:9998'
-$env:PAISMART_ES_URL = 'http://127.0.0.1:9200'
-$env:PAISMART_ES_USERNAME = ''
-$env:PAISMART_ES_PASSWORD = ''
+$env:RHA_HOST = '0.0.0.0'
+$env:RHA_PORT = '8090'
+$env:RHA_GO_BASE_URL = 'http://127.0.0.1:8081'
+$env:RHA_INTERNAL_TOKEN = 'rha-internal-dev'
+$env:RHA_REQUEST_TIMEOUT_SECONDS = '300'
+$env:RHA_LLM_BASE_URL = 'https://api.deepseek.com/v1'
+$env:RHA_LLM_API_KEY = $env:RHA_LLM_API_KEY
+$env:RHA_LLM_MODEL = 'deepseek-chat'
+$env:RHA_LLM_TEMPERATURE = '0.3'
+$env:RHA_LLM_TOP_P = '0.9'
+$env:RHA_LLM_MAX_TOKENS = '2000'
+$env:RHA_PLANNER_BASE_URL = 'https://api.deepseek.com/v1'
+$env:RHA_PLANNER_API_KEY = $env:RHA_PLANNER_API_KEY
+$env:RHA_PLANNER_MODEL = 'deepseek-chat'
+$env:RHA_PLANNER_TEMPERATURE = '0.1'
+$env:RHA_PLANNER_MAX_TOKENS = '256'
+$env:RHA_EMBEDDING_BASE_URL = 'http://127.0.0.1:18009'
+$env:RHA_EMBEDDING_API_KEY = ''
+$env:RHA_EMBEDDING_MODEL = 'BAAI/bge-small-zh-v1.5'
+$env:RHA_EMBEDDING_DIMENSIONS = '512'
+$env:RHA_TIKA_URL = 'http://127.0.0.1:9998'
+$env:RHA_ES_URL = 'http://127.0.0.1:9200'
+$env:RHA_ES_USERNAME = ''
+$env:RHA_ES_PASSWORD = ''
 
 Start-BackgroundProcess `
     -FilePath '.\ai-orchestrator\.venv\Scripts\python.exe' `

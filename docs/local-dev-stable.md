@@ -21,7 +21,7 @@
 
 本模式使用：
 
-- [configs/config.dev-stable.yaml](/D:/vscode/paismart-go-main/configs/config.dev-stable.yaml)
+- [configs/config.dev-stable.yaml](/D:/vscode/rha-go-main/configs/config.dev-stable.yaml)
 
 关键差异：
 

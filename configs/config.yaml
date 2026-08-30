@@ -4,10 +4,10 @@
 
 database:
   mysql:
-    dsn: "root:PaiSmart2025@tcp(127.0.0.1:3307)/PaiSmart?charset=utf8mb4&parseTime=True&loc=Local"
+    dsn: "root:RHA2025@tcp(127.0.0.1:3307)/RHA?charset=utf8mb4&parseTime=True&loc=Local"
   redis:
     addr: "127.0.0.1:6380"
-    password: "PaiSmart2025"
+    password: "RHA2025"
     db: 0
 
 jwt:
@@ -23,7 +23,7 @@ log:
 kafka:
   brokers: "127.0.0.1:9092"
   topic: "file-parse"
-  consumer_group_prefix: "paismart-go"
+  consumer_group_prefix: "rha-go"
   max_retries: 3
   base_backoff_ms: 800
   embedding_batch_size: 8
@@ -62,7 +62,7 @@ embedding:
 llm:
   base_url: "https://api.deepseek.com/v1"
   model: deepseek-chat
-  api_key: "${PAISMART_LLM_API_KEY}"
+  api_key: "${RHA_LLM_API_KEY}"
   prompt:
     rules: |
       你是企业知识库问答助手，必须遵守：
@@ -115,4 +115,4 @@ ai:
     base_url: "http://127.0.0.1:8090"
     timeout_ms: 120000
     ingestion_timeout_ms: 180000
-    shared_secret: "paismart-internal-dev"
+    shared_secret: "rha-internal-dev"

@@ -3,9 +3,9 @@ package handler
 import (
 	"net/http"
 
-	"pai-smart-go/internal/model"
-	"pai-smart-go/internal/service"
-	"pai-smart-go/pkg/log"
+	"github.com/huadeng408/RAG-High-Availability/internal/model"
+	"github.com/huadeng408/RAG-High-Availability/internal/service"
+	"github.com/huadeng408/RAG-High-Availability/pkg/log"
 
 	"github.com/gin-gonic/gin"
 )

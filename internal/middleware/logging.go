@@ -5,7 +5,7 @@ import (
 	"bytes"
 	"github.com/gin-gonic/gin"
 	"io/ioutil"
-	"pai-smart-go/pkg/log"
+	"github.com/huadeng408/RAG-High-Availability/pkg/log"
 	"time"
 )
 

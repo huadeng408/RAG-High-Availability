@@ -7,10 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"pai-smart-go/internal/config"
-	"pai-smart-go/internal/repository"
-	"pai-smart-go/pkg/log"
-	"pai-smart-go/pkg/tasks"
+	"github.com/huadeng408/RAG-High-Availability/internal/config"
+	"github.com/huadeng408/RAG-High-Availability/internal/repository"
+	"github.com/huadeng408/RAG-High-Availability/pkg/log"
+	"github.com/huadeng408/RAG-High-Availability/pkg/tasks"
 	"strings"
 	"time"
 
@@ -42,7 +42,7 @@ var (
 // normalizeKafkaConfig normalizes kafka config.
 func normalizeKafkaConfig(cfg config.KafkaConfig) config.KafkaConfig {
 	if cfg.ConsumerGroupPrefix == "" {
-		cfg.ConsumerGroupPrefix = "pai-smart-go"
+		cfg.ConsumerGroupPrefix = "github.com/huadeng408/RAG-High-Availability"
 	}
 	if cfg.MaxRetries <= 0 {
 		cfg.MaxRetries = 3

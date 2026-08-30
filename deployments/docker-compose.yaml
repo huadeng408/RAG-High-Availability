@@ -8,8 +8,8 @@ services:
     ports:
       - "3307:3306"
     environment:
-      MYSQL_ROOT_PASSWORD: PaiSmart2025
-      MYSQL_DATABASE: PaiSmart
+      MYSQL_ROOT_PASSWORD: RHA2025
+      MYSQL_DATABASE: RHA
     volumes:
       - mysql-data:/var/lib/mysql
       - ../docs/ddl.sql:/docker-entrypoint-initdb.d/001-ddl.sql:ro
@@ -28,10 +28,10 @@ services:
       - "6380:6379"
     volumes:
       - redis-data:/data
-    command: redis-server --bind 0.0.0.0 --port 6379 --requirepass PaiSmart2025 --appendonly yes
+    command: redis-server --bind 0.0.0.0 --port 6379 --requirepass RHA2025 --appendonly yes
     healthcheck:
       start_period: 5s
-      test: ["CMD", "redis-cli", "-a", "PaiSmart2025", "ping"]
+      test: ["CMD", "redis-cli", "-a", "RHA2025", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -120,13 +120,13 @@ services:
     ports:
       - "9200:9200"
     environment:
-      - node.name=pai-smart-es01
+      - node.name=rha-es01
       - discovery.type=single-node
       - xpack.license.self_generated.type=basic
       - xpack.security.enabled=false
       - xpack.security.enrollment.enabled=false
       - xpack.security.http.ssl.enabled=false
-      - cluster.name=pai-smart-es-cluster
+      - cluster.name=rha-es-cluster
       - ES_JAVA_OPTS=-Xms768m -Xmx768m
     volumes:
       - es-data:/usr/share/elasticsearch/data
@@ -190,4 +190,4 @@ volumes:
 
 networks:
   default:
-    name: paismart-go-network
+    name: rha-go-network
