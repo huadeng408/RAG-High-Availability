@@ -4,9 +4,11 @@ import asyncio
 import json
 import mimetypes
 import re
+import tempfile
 import time
 from collections import Counter
 from functools import lru_cache
+from pathlib import Path
 
 import httpx
 from langchain_core.documents import Document
@@ -24,6 +26,7 @@ from .models import (
     ParseRequestPayload,
     ParseResponsePayload,
 )
+from .structured_ingestion import FixtureParser, ParserRegistry, chunks_from_evidence
 from .trace import current_trace_id, elapsed_ms, log_request
 
 TOKEN_CHUNK_SIZE = 500
@@ -47,6 +50,10 @@ class IngestionService:
         fallback_kwargs = dict(embedding_kwargs)
         fallback_kwargs.pop("dimensions", None)
         self._embeddings_without_dimensions = OpenAIEmbeddings(**fallback_kwargs)
+        self._parser_registry = ParserRegistry(
+            settings.mineru_command,
+            settings.mineru_timeout_seconds,
+        )
         _warm_splitter_cache()
 
     async def close(self) -> None:
@@ -56,36 +63,45 @@ class IngestionService:
         start = time.perf_counter()
         source_resp = await self._http.get(payload.objectUrl)
         source_resp.raise_for_status()
+        document_version = payload.task.document_version.strip()
+        if not document_version:
+            raise ValueError("document_version is required for structured parsing")
 
-        tika_resp = await self._http.put(
-            f"{self._settings.tika_url.rstrip('/')}/tika",
-            content=source_resp.content,
-            headers={
-                "Accept": "text/plain",
-                "Content-Type": _detect_mime_type(payload.task.file_name),
-            },
-        )
-        tika_resp.raise_for_status()
-        parsed_text = _clean_parsed_text(tika_resp.text, payload.task.file_name)
+        suffix = Path(payload.task.file_name).suffix
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as source_file:
+            source_file.write(source_resp.content)
+            source_path = Path(source_file.name)
+        try:
+            parsed_document = await asyncio.to_thread(self._parse_source, source_path, document_version)
+        finally:
+            source_path.unlink(missing_ok=True)
         log_request(
             "ingestion_parse",
             latency_ms=elapsed_ms(start),
             file_md5=payload.task.file_md5,
+            document_version=document_version,
             file_type=_detect_file_type(payload.task.file_name),
         )
-        return ParseResponsePayload(parsedText=parsed_text)
+        return ParseResponsePayload(parsedDocument=parsed_document)
+
+    def _parse_source(self, source_path: Path, document_version: str):
+        mode = self._settings.ingestion_mode
+        if mode == "fixture":
+            return FixtureParser().parse_modality(_detect_file_type(source_path.name), document_version)
+        if mode != "production":
+            raise ValueError(f"unsupported RHA_INGESTION_MODE: {mode}")
+        return self._parser_registry.parse(source_path, document_version)
 
     async def chunk(self, payload: ChunkRequestPayload) -> ChunkResponsePayload:
         start = time.perf_counter()
         file_name = payload.task.file_name
         file_type = _detect_file_type(file_name)
-        cleaned_text = _clean_parsed_text(payload.text, file_name)
-        documents = _split_documents_by_type(cleaned_text, payload.task.file_md5, file_name, file_type)
-        chunks = [doc.page_content for doc in documents if doc.page_content.strip()]
+        chunks = payload.parsedDocument.chunks or chunks_from_evidence(payload.parsedDocument.evidenceUnits)
         log_request(
             "ingestion_chunk",
             latency_ms=elapsed_ms(start),
             file_md5=payload.task.file_md5,
+            document_version=payload.parsedDocument.documentVersion,
             file_type=file_type,
             chunk_size=TOKEN_CHUNK_SIZE,
             chunk_overlap=TOKEN_CHUNK_OVERLAP,
@@ -222,6 +238,10 @@ def _detect_file_type(file_name: str) -> str:
         return "markdown"
     if lower_name.endswith(".pdf"):
         return "pdf"
+    if lower_name.endswith((".doc", ".docx")):
+        return "word"
+    if lower_name.endswith((".ppt", ".pptx")):
+        return "ppt"
     if lower_name.endswith((".xls", ".xlsx", ".csv")):
         return "excel"
     return "default"

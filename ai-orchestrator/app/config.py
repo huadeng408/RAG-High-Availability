@@ -46,7 +46,9 @@ class Settings:
     planner: ModelSettings
     embedding: ModelSettings
     embedding_dimensions: int
-    tika_url: str
+    ingestion_mode: str
+    mineru_command: str
+    mineru_timeout_seconds: int
     es_url: str
     es_username: str
     es_password: str
@@ -92,7 +94,9 @@ def load_settings() -> Settings:
         planner=planner,
         embedding=embedding,
         embedding_dimensions=_get_int("RHA_EMBEDDING_DIMENSIONS", 512),
-        tika_url=os.getenv("RHA_TIKA_URL", "http://127.0.0.1:9998").strip(),
+        ingestion_mode=os.getenv("RHA_INGESTION_MODE", "production").strip().lower(),
+        mineru_command=os.getenv("RHA_MINERU_COMMAND", "mineru").strip(),
+        mineru_timeout_seconds=_get_int("RHA_MINERU_TIMEOUT_SECONDS", 120),
         es_url=os.getenv("RHA_ES_URL", "http://127.0.0.1:9200").strip(),
         es_username=os.getenv("RHA_ES_USERNAME", "").strip(),
         es_password=os.getenv("RHA_ES_PASSWORD", "").strip(),

@@ -31,6 +31,9 @@ class ContextSnippetPayload(BaseModel):
 
 class FileProcessingTaskPayload(BaseModel):
     file_md5: str
+    document_version: str = ""
+    window_id: str = ""
+    trace_id: str = ""
     object_url: str = ""
     file_name: str
     user_id: int
@@ -190,19 +193,75 @@ class ParseRequestPayload(BaseModel):
     objectUrl: str
 
 
+class BoundingBoxPayload(BaseModel):
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
+class ParserReceiptPayload(BaseModel):
+    engine: str
+    version: str = ""
+    ocrPerformed: bool = False
+
+
+class EvidenceUnitPayload(BaseModel):
+    evidenceId: str
+    documentVersion: str
+    modality: str
+    elementType: str
+    page: int = 0
+    slide: int = 0
+    sheet: str = ""
+    rowStart: int = 0
+    rowEnd: int = 0
+    headingPath: list[str] = Field(default_factory=list)
+    header: list[str] = Field(default_factory=list)
+    bbox: BoundingBoxPayload | None = None
+    text: str
+    parserName: str = ""
+    parserVersion: str = ""
+    assetPath: str = ""
+
+
+class StructuredChunkPayload(BaseModel):
+    id: str
+    documentVersion: str
+    text: str
+    modality: str
+    headingPath: list[str] = Field(default_factory=list)
+    page: int = 0
+    slide: int = 0
+    sheet: str = ""
+    rowStart: int = 0
+    rowEnd: int = 0
+    evidenceIds: list[str] = Field(default_factory=list)
+
+
+class ParsedDocumentPayload(BaseModel):
+    sourceId: str = ""
+    fileName: str = ""
+    documentVersion: str
+    modality: str
+    parserReceipt: ParserReceiptPayload
+    evidenceUnits: list[EvidenceUnitPayload] = Field(default_factory=list)
+    chunks: list[StructuredChunkPayload] = Field(default_factory=list)
+
+
 class ParseResponsePayload(BaseModel):
-    parsedText: str
+    parsedDocument: ParsedDocumentPayload
 
 
 class ChunkRequestPayload(BaseModel):
     task: FileProcessingTaskPayload
-    text: str
+    parsedDocument: ParsedDocumentPayload
     chunkSize: int = 500
     chunkOverlap: int = 50
 
 
 class ChunkResponsePayload(BaseModel):
-    chunks: list[str] = Field(default_factory=list)
+    chunks: list[StructuredChunkPayload] = Field(default_factory=list)
 
 
 class EmbedRequestPayload(BaseModel):
