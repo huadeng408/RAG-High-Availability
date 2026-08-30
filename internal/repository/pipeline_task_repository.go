@@ -7,10 +7,12 @@ import (
 	"github.com/huadeng408/RAG-High-Availability/internal/model"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // PipelineTaskRepository defines persistence operations for pipeline task data.
 type PipelineTaskRepository interface {
+	GetOrStart(documentVersion, stage, windowID string) (*model.PipelineTask, error)
 	GetByKey(fileMD5, stage string, chunkID int) (*model.PipelineTask, error)
 	MarkProcessing(fileMD5, stage string, chunkID int) (*model.PipelineTask, error)
 	MarkSuccess(fileMD5, stage string, chunkID int) error
@@ -32,6 +34,32 @@ func NewPipelineTaskRepository(db *gorm.DB) PipelineTaskRepository {
 // buildPipelineKey builds pipeline key.
 func buildPipelineKey(fileMD5, stage string, chunkID int) string {
 	return fmt.Sprintf("%s:%s:%d", fileMD5, stage, chunkID)
+}
+
+// GetOrStart atomically creates or loads one versioned pipeline task.
+func (r *pipelineTaskRepository) GetOrStart(documentVersion, stage, windowID string) (*model.PipelineTask, error) {
+	task := &model.PipelineTask{
+		DocumentVersion: documentVersion,
+		Stage:           stage,
+		WindowID:        windowID,
+		Status:          model.PipelineStatusPending,
+		ChunkID:         -1,
+		IdempotencyKey:  fmt.Sprintf("%s:%s:%s", documentVersion, stage, windowID),
+	}
+	result := r.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "document_version"}, {Name: "stage"}, {Name: "window_id"}},
+		DoNothing: true,
+	}).Create(task)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected > 0 {
+		return task, nil
+	}
+	if err := r.db.Where("document_version = ? AND stage = ? AND window_id = ?", documentVersion, stage, windowID).First(task).Error; err != nil {
+		return nil, err
+	}
+	return task, nil
 }
 
 // GetByKey returns by key.
