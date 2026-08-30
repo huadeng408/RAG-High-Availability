@@ -21,7 +21,13 @@ import (
 // Client defines the external LangGraph orchestrator client.
 type Client interface {
 	Enabled() bool
-	StreamResponse(ctx context.Context, query string, user *model.User, ws *websocket.Conn, shouldStop func() bool) error
+	StreamResponse(ctx context.Context, query string, user *model.User, ws *websocket.Conn, shouldStop func() bool) (StreamCompletion, error)
+}
+
+// StreamCompletion is the terminal metadata returned by the LangGraph stream.
+type StreamCompletion struct {
+	TraceID   string           `json:"traceId"`
+	Citations []model.Citation `json:"citations"`
 }
 
 type noopClient struct{}
@@ -32,8 +38,8 @@ func (noopClient) Enabled() bool {
 }
 
 // StreamResponse implements the disabled client behavior.
-func (noopClient) StreamResponse(ctx context.Context, query string, user *model.User, ws *websocket.Conn, shouldStop func() bool) error {
-	return fmt.Errorf("ai orchestrator is disabled")
+func (noopClient) StreamResponse(ctx context.Context, query string, user *model.User, ws *websocket.Conn, shouldStop func() bool) (StreamCompletion, error) {
+	return StreamCompletion{}, fmt.Errorf("ai orchestrator is disabled")
 }
 
 type httpClient struct {
@@ -47,13 +53,15 @@ type streamRequest struct {
 }
 
 type streamEvent struct {
-	Type  string   `json:"type"`
-	Chunk string   `json:"chunk,omitempty"`
-	Error string   `json:"error,omitempty"`
-	Trace string   `json:"trace,omitempty"`
-	Done  bool     `json:"done,omitempty"`
-	Final string   `json:"final,omitempty"`
-	Extra []string `json:"extra,omitempty"`
+	Type      string           `json:"type"`
+	Chunk     string           `json:"chunk,omitempty"`
+	Error     string           `json:"error,omitempty"`
+	Trace     string           `json:"trace,omitempty"`
+	Done      bool             `json:"done,omitempty"`
+	TraceID   string           `json:"traceId,omitempty"`
+	Citations []model.Citation `json:"citations,omitempty"`
+	Final     string           `json:"final,omitempty"`
+	Extra     []string         `json:"extra,omitempty"`
 }
 
 // NewClient constructs the external LangGraph orchestrator client.
@@ -77,14 +85,15 @@ func (c *httpClient) Enabled() bool {
 }
 
 // StreamResponse proxies an external orchestrator stream into the websocket contract expected by the frontend.
-func (c *httpClient) StreamResponse(ctx context.Context, query string, user *model.User, ws *websocket.Conn, shouldStop func() bool) error {
+func (c *httpClient) StreamResponse(ctx context.Context, query string, user *model.User, ws *websocket.Conn, shouldStop func() bool) (StreamCompletion, error) {
 	if user == nil {
-		return fmt.Errorf("user is required")
+		return StreamCompletion{}, fmt.Errorf("user is required")
 	}
 
 	reqCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	reqCtx, traceID := EnsureTraceID(reqCtx)
+	completion := StreamCompletion{TraceID: traceID, Citations: []model.Citation{}}
 
 	done := make(chan struct{})
 	defer close(done)
@@ -113,13 +122,13 @@ func (c *httpClient) StreamResponse(ctx context.Context, query string, user *mod
 		User:  model.NewOrchestratorUser(user),
 	})
 	if err != nil {
-		return fmt.Errorf("marshal orchestrator request failed: %w", err)
+		return StreamCompletion{}, fmt.Errorf("marshal orchestrator request failed: %w", err)
 	}
 
 	baseURL := strings.TrimRight(strings.TrimSpace(c.cfg.BaseURL), "/")
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, baseURL+"/v1/chat/stream", bytes.NewReader(bodyBytes))
 	if err != nil {
-		return fmt.Errorf("create orchestrator request failed: %w", err)
+		return StreamCompletion{}, fmt.Errorf("create orchestrator request failed: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/x-ndjson")
@@ -139,15 +148,15 @@ func (c *httpClient) StreamResponse(ctx context.Context, query string, user *mod
 	if err != nil {
 		if reqCtx.Err() == context.Canceled && shouldStop != nil && shouldStop() {
 			log.Infow("[OrchestratorClient] stream canceled", "trace_id", traceID, "latency_ms", time.Since(start).Milliseconds())
-			return nil
+			return completion, nil
 		}
-		return fmt.Errorf("call orchestrator failed: %w", err)
+		return StreamCompletion{}, fmt.Errorf("call orchestrator failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("orchestrator returned status=%s body=%s", resp.Status, strings.TrimSpace(string(raw)))
+		return StreamCompletion{}, fmt.Errorf("orchestrator returned status=%s body=%s", resp.Status, strings.TrimSpace(string(raw)))
 	}
 
 	reader := bufio.NewReader(resp.Body)
@@ -161,17 +170,22 @@ func (c *httpClient) StreamResponse(ctx context.Context, query string, user *mod
 					if event.Chunk != "" {
 						if shouldStop != nil && shouldStop() {
 							cancel()
-							return nil
+							return completion, nil
 						}
 						payload, _ := json.Marshal(map[string]string{"chunk": event.Chunk})
 						if err := ws.WriteMessage(websocket.TextMessage, payload); err != nil {
-							return fmt.Errorf("write websocket chunk failed: %w", err)
+							return StreamCompletion{}, fmt.Errorf("write websocket chunk failed: %w", err)
 						}
 					}
 				case "error":
 					if event.Error != "" {
-						return fmt.Errorf("orchestrator stream error: %s", event.Error)
+						return StreamCompletion{}, fmt.Errorf("orchestrator stream error: %s", event.Error)
 					}
+				case "done":
+					if event.TraceID != "" {
+						completion.TraceID = event.TraceID
+					}
+					completion.Citations = deduplicateCitations(event.Citations)
 				}
 			}
 		}
@@ -182,9 +196,25 @@ func (c *httpClient) StreamResponse(ctx context.Context, query string, user *mod
 					"trace_id", traceID,
 					"latency_ms", time.Since(start).Milliseconds(),
 				)
-				return nil
+				return completion, nil
 			}
-			return fmt.Errorf("read orchestrator stream failed: %w", readErr)
+			return StreamCompletion{}, fmt.Errorf("read orchestrator stream failed: %w", readErr)
 		}
 	}
+}
+
+func deduplicateCitations(citations []model.Citation) []model.Citation {
+	unique := make([]model.Citation, 0, len(citations))
+	seen := make(map[string]struct{}, len(citations))
+	for _, citation := range citations {
+		if citation.EvidenceID == "" {
+			continue
+		}
+		if _, exists := seen[citation.EvidenceID]; exists {
+			continue
+		}
+		seen[citation.EvidenceID] = struct{}{}
+		unique = append(unique, citation)
+	}
+	return unique
 }

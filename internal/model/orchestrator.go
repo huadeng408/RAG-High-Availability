@@ -38,12 +38,13 @@ func (u OrchestratorUser) ToUser() *User {
 
 // OrchestratorContextSnippet mirrors one retrieval snippet returned to the orchestrator.
 type OrchestratorContextSnippet struct {
-	ID         string    `json:"id"`
-	SourceType string    `json:"sourceType"`
-	Label      string    `json:"label"`
-	Text       string    `json:"text"`
-	Score      float64   `json:"score"`
-	Timestamp  time.Time `json:"timestamp"`
+	ID         string     `json:"id"`
+	SourceType string     `json:"sourceType"`
+	Label      string     `json:"label"`
+	Text       string     `json:"text"`
+	Score      float64    `json:"score"`
+	Timestamp  time.Time  `json:"timestamp"`
+	Citations  []Citation `json:"citations"`
 }
 
 // OrchestratorSessionRequest requests the persisted session snapshot for a user.

@@ -406,6 +406,7 @@ func convertContextSnippets(items []ContextSnippet) []model.OrchestratorContextS
 			Text:       item.Text,
 			Score:      item.Score,
 			Timestamp:  item.Timestamp,
+			Citations:  item.Citations,
 		})
 	}
 	return out
@@ -425,6 +426,7 @@ func convertOrchestratorSnippets(items []model.OrchestratorContextSnippet) []Con
 			Text:       item.Text,
 			Score:      item.Score,
 			Timestamp:  item.Timestamp,
+			Citations:  item.Citations,
 		})
 	}
 	return out

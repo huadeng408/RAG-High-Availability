@@ -20,6 +20,7 @@ import (
 	"github.com/huadeng408/RAG-High-Availability/internal/repository"
 	"github.com/huadeng408/RAG-High-Availability/pkg/embedding"
 	"github.com/huadeng408/RAG-High-Availability/pkg/log"
+	"github.com/huadeng408/RAG-High-Availability/pkg/objectpath"
 	"github.com/huadeng408/RAG-High-Availability/pkg/reranker"
 
 	"github.com/elastic/go-elasticsearch/v8"
@@ -525,6 +526,10 @@ func (s *searchService) buildResponseDTOs(hits []retrievalHit) ([]model.SearchRe
 		if fileName == "" {
 			fileName = "unknown"
 		}
+		citations := CitationsFromDocument(hit.Source)
+		for i := range citations {
+			citations[i].SourcePath = objectpath.MergedObjectName(hit.Source.FileMD5, fileName)
+		}
 		results = append(results, model.SearchResponseDTO{
 			FileMD5:     hit.Source.FileMD5,
 			FileName:    fileName,
@@ -534,6 +539,7 @@ func (s *searchService) buildResponseDTOs(hits []retrievalHit) ([]model.SearchRe
 			UserID:      strconv.FormatUint(uint64(hit.Source.UserID), 10),
 			OrgTag:      hit.Source.OrgTag,
 			IsPublic:    hit.Source.IsPublic,
+			Citations:   citations,
 		})
 	}
 
@@ -630,7 +636,21 @@ func buildPermissionFilter(userID uint, orgTags []string) map[string]any {
 
 // buildSourceFields builds source fields.
 func buildSourceFields() []string {
-	return []string{"file_md5", "chunk_id", "text_content", "user_id", "org_tag", "is_public"}
+	return []string{
+		"file_md5",
+		"chunk_id",
+		"text_content",
+		"user_id",
+		"org_tag",
+		"is_public",
+		"document_version",
+		"modality",
+		"page",
+		"slide",
+		"sheet",
+		"evidence_ids",
+		"bbox",
+	}
 }
 
 // fuseHitsByMode fuses hits by mode.

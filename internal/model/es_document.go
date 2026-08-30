@@ -3,14 +3,15 @@ package model
 
 // SearchResponseDTO 定义了返回给前端的搜索结果结构。
 type SearchResponseDTO struct {
-	FileMD5     string  `json:"fileMd5"`
-	FileName    string  `json:"fileName"` // 新增：原始文件名
-	ChunkID     int     `json:"chunkId"`
-	TextContent string  `json:"textContent"`
-	Score       float64 `json:"score"` // 新增：搜索得分
-	UserID      string  `json:"userId"`
-	OrgTag      string  `json:"orgTag"`
-	IsPublic    bool    `json:"isPublic"`
+	FileMD5     string     `json:"fileMd5"`
+	FileName    string     `json:"fileName"` // 新增：原始文件名
+	ChunkID     int        `json:"chunkId"`
+	TextContent string     `json:"textContent"`
+	Score       float64    `json:"score"` // 新增：搜索得分
+	UserID      string     `json:"userId"`
+	OrgTag      string     `json:"orgTag"`
+	IsPublic    bool       `json:"isPublic"`
+	Citations   []Citation `json:"citations"`
 }
 
 // EsDocument 代表存储在 Elasticsearch 中的文档结构。

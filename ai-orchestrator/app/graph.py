@@ -17,6 +17,7 @@ from typing_extensions import TypedDict
 from .backend import GoBackendClient
 from .config import ModelSettings, Settings
 from .models import (
+    CitationPayload,
     ChatMessagePayload,
     PersistRequestPayload,
     PlannerDecision,
@@ -84,7 +85,7 @@ class RAGState(TypedDict, total=False):
     system_message: str
     prompt_messages: list[BaseMessage]
     answer: str
-    citations: list[str]
+    citations: list[CitationPayload]
 
 
 def build_graph(settings: Settings, backend: GoBackendClient):
@@ -296,11 +297,12 @@ def build_graph(settings: Settings, backend: GoBackendClient):
         reranked_docs = [context_snippet_to_document(item) for item in response.items]
         context_text = _build_context_text(reranked_docs)
         emit_trace("rerank_context", latency_ms=elapsed_ms(start), docs=len(reranked_docs))
+        citations = _build_citations(reranked_docs)
         return {
             "reranked_docs": reranked_docs,
             "context_items": [item.model_dump(mode="json") for item in response.items],
             "context_text": context_text,
-            "citations": _build_citations(reranked_docs),
+            "citations": citations or list(state.get("citations", [])),
         }
 
     async def build_messages(state: RAGState) -> RAGState:
@@ -563,15 +565,47 @@ def _build_system_message(
     return "\n\n".join(parts)
 
 
-def _build_citations(docs: list[Document]) -> list[str]:
-    citations: list[str] = []
+def _build_citations(docs: list[Document]) -> list[CitationPayload]:
+    citations: list[CitationPayload] = []
     seen: set[str] = set()
+
+    def add_citation(raw_citation: Any) -> None:
+        try:
+            citation = CitationPayload.model_validate(raw_citation)
+        except (TypeError, ValueError):
+            return
+        if not citation.evidenceId or citation.evidenceId in seen:
+            return
+        seen.add(citation.evidenceId)
+        citations.append(citation)
+
     for doc in docs:
-        label = str(doc.metadata.get("label") or doc.metadata.get("id") or "").strip()
-        if not label or label in seen:
-            continue
-        seen.add(label)
-        citations.append(label)
+        metadata = doc.metadata or {}
+        raw_citations = metadata.get("citations", [])
+        if isinstance(raw_citations, list):
+            for raw_citation in raw_citations:
+                add_citation(raw_citation)
+                if len(citations) >= 5:
+                    break
+        if len(citations) >= 5:
+            break
+
+        evidence_id = str(metadata.get("evidenceId") or metadata.get("evidence_id") or "").strip()
+        if evidence_id:
+            add_citation(
+                {
+                    "evidenceId": evidence_id,
+                    "label": str(metadata.get("label") or "").strip(),
+                    "documentVersion": str(metadata.get("documentVersion") or metadata.get("document_version") or "").strip(),
+                    "modality": str(metadata.get("modality") or "").strip(),
+                    "page": metadata.get("page") or 0,
+                    "slide": metadata.get("slide") or 0,
+                    "sheet": str(metadata.get("sheet") or "").strip(),
+                    "bbox": metadata.get("bbox"),
+                    "excerpt": doc.page_content,
+                    "sourcePath": str(metadata.get("sourcePath") or metadata.get("source_path") or "").strip(),
+                }
+            )
         if len(citations) >= 5:
             break
     return citations

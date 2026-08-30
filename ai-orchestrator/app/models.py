@@ -20,6 +20,26 @@ class ChatMessagePayload(BaseModel):
     timestamp: datetime | None = None
 
 
+class BoundingBoxPayload(BaseModel):
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
+class CitationPayload(BaseModel):
+    evidenceId: str
+    label: str = ""
+    documentVersion: str = ""
+    modality: str = ""
+    page: int = 0
+    slide: int = 0
+    sheet: str = ""
+    bbox: BoundingBoxPayload | None = None
+    excerpt: str = ""
+    sourcePath: str = ""
+
+
 class ContextSnippetPayload(BaseModel):
     id: str = ""
     sourceType: str = ""
@@ -27,6 +47,7 @@ class ContextSnippetPayload(BaseModel):
     text: str = ""
     score: float = 0.0
     timestamp: datetime | None = None
+    citations: list[CitationPayload] = Field(default_factory=list)
 
 
 class FileProcessingTaskPayload(BaseModel):
@@ -118,6 +139,7 @@ class SearchResultPayload(BaseModel):
     userId: str = ""
     orgTag: str = ""
     isPublic: bool = False
+    citations: list[CitationPayload] = Field(default_factory=list)
 
 
 class KnowledgeSearchRequestPayload(BaseModel):
@@ -191,13 +213,6 @@ class MemoryWriteResponsePayload(BaseModel):
 class ParseRequestPayload(BaseModel):
     task: FileProcessingTaskPayload
     objectUrl: str
-
-
-class BoundingBoxPayload(BaseModel):
-    x0: float
-    y0: float
-    x1: float
-    y1: float
 
 
 class ParserReceiptPayload(BaseModel):
@@ -308,4 +323,27 @@ class StreamEvent(BaseModel):
     trace: str = ""
     error: str = ""
     done: bool = False
+    traceId: str = ""
+    citations: list[CitationPayload] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+def build_done_event(
+    trace_id: str,
+    citations: list[CitationPayload],
+    metadata: dict[str, Any] | None = None,
+) -> StreamEvent:
+    seen_evidence: set[str] = set()
+    unique_citations: list[CitationPayload] = []
+    for citation in citations:
+        if not citation.evidenceId or citation.evidenceId in seen_evidence:
+            continue
+        seen_evidence.add(citation.evidenceId)
+        unique_citations.append(citation)
+    return StreamEvent(
+        type="done",
+        done=True,
+        traceId=trace_id,
+        citations=unique_citations,
+        metadata=metadata or {},
+    )

@@ -157,6 +157,7 @@ def search_result_to_document(item: SearchResultPayload, mode: str) -> Document:
         "retrievalMode": mode,
         "orgTag": item.orgTag,
         "isPublic": item.isPublic,
+        "citations": [citation.model_dump(mode="json") for citation in item.citations],
     }
     return Document(page_content=item.textContent, metadata=metadata)
 
@@ -171,6 +172,7 @@ def context_snippet_to_document(item: ContextSnippetPayload) -> Document:
         "score": item.score,
         "raw_score": item.score,
         "timestamp": item.timestamp.isoformat() if item.timestamp else "",
+        "citations": [citation.model_dump(mode="json") for citation in item.citations],
     }
     return Document(page_content=item.text, metadata=metadata)
 
@@ -187,6 +189,7 @@ def document_to_context_snippet(doc: Document) -> ContextSnippetPayload:
         text=doc.page_content,
         score=float(metadata.get("score", 0.0) or 0.0),
         timestamp=timestamp,
+        citations=metadata.get("citations", []),
     )
 
 

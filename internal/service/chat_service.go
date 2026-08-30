@@ -51,10 +51,11 @@ func (s *chatService) StreamResponse(ctx context.Context, query string, user *mo
 	if s.orchestrator == nil || !s.orchestrator.Enabled() {
 		return fmt.Errorf("langgraph orchestrator is disabled")
 	}
-	if err := s.orchestrator.StreamResponse(ctx, query, user, ws, shouldStop); err != nil {
+	completion, err := s.orchestrator.StreamResponse(ctx, query, user, ws, shouldStop)
+	if err != nil {
 		return err
 	}
-	sendCompletion(ws)
+	sendCompletion(ws, completion)
 	return nil
 }
 
@@ -282,6 +283,7 @@ func (s *chatService) convertSearchResultsToContext(results []model.SearchRespon
 			Label:      label,
 			Text:       result.TextContent,
 			Score:      result.Score,
+			Citations:  result.Citations,
 		})
 	}
 	return items
@@ -349,13 +351,17 @@ func mergeSearchResults(groups [][]model.SearchResponseDTO, topK int) []model.Se
 }
 
 // sendCompletion notifies the websocket client that the current response has finished.
-func sendCompletion(ws *websocket.Conn) {
+func sendCompletion(ws *websocket.Conn, completion orchestratorclient.StreamCompletion) {
 	notif := map[string]any{
 		"type":      "completion",
 		"status":    "finished",
 		"message":   "response finished",
 		"timestamp": time.Now().UnixMilli(),
 		"date":      time.Now().Format("2006-01-02T15:04:05"),
+		"citations": completion.Citations,
+	}
+	if completion.TraceID != "" {
+		notif["traceId"] = completion.TraceID
 	}
 	b, _ := json.Marshal(notif)
 	_ = ws.WriteMessage(websocket.TextMessage, b)

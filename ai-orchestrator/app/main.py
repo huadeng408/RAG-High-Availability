@@ -23,6 +23,7 @@ from .models import (
     MemoryWriteRequestPayload,
     ParseRequestPayload,
     StreamEvent,
+    build_done_event,
 )
 from .trace import configure_logging, current_trace_id, elapsed_ms, log_request, reset_trace_id, set_trace_id
 
@@ -103,6 +104,8 @@ async def healthz() -> dict[str, str]:
 
 @app.post("/v1/chat/stream")
 async def chat_stream(payload: ChatStreamRequest, request: Request, _: None = Depends(verify_internal_token)):
+    trace_id = current_trace_id()
+
     async def event_stream():
         run_task: asyncio.Task | None = None
         try:
@@ -130,8 +133,7 @@ async def chat_stream(payload: ChatStreamRequest, request: Request, _: None = De
                 except asyncio.TimeoutError:
                     continue
                 yield json.dumps(StreamEvent(type="chunk", chunk=chunk).model_dump(mode="json"), ensure_ascii=False) + "\n"
-            if run_task is not None:
-                await run_task
+            final_state = await run_task if run_task is not None else {}
         except asyncio.CancelledError:
             if run_task is not None:
                 run_task.cancel()
@@ -143,7 +145,8 @@ async def chat_stream(payload: ChatStreamRequest, request: Request, _: None = De
             yield json.dumps(error_event.model_dump(mode="json"), ensure_ascii=False) + "\n"
             return
 
-        done_event = StreamEvent(type="done", done=True, metadata={"userId": payload.user.id, "traceId": current_trace_id()})
+        citations = final_state.get("citations", []) if isinstance(final_state, dict) else []
+        done_event = build_done_event(trace_id, citations, metadata={"userId": payload.user.id})
         yield json.dumps(done_event.model_dump(mode="json"), ensure_ascii=False) + "\n"
 
     return StreamingResponse(event_stream(), media_type="application/x-ndjson")

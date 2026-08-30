@@ -19,3 +19,22 @@ func CitationFromDocument(document model.EsDocument) model.Citation {
 		Excerpt:         document.TextContent,
 	}
 }
+
+// CitationsFromDocument produces one page-level citation for every unique evidence reference on a retrieval hit.
+func CitationsFromDocument(document model.EsDocument) []model.Citation {
+	citations := make([]model.Citation, 0, len(document.EvidenceIDs))
+	seen := make(map[string]struct{}, len(document.EvidenceIDs))
+	for _, evidenceID := range document.EvidenceIDs {
+		if evidenceID == "" {
+			continue
+		}
+		if _, exists := seen[evidenceID]; exists {
+			continue
+		}
+		seen[evidenceID] = struct{}{}
+		citation := CitationFromDocument(document)
+		citation.EvidenceID = evidenceID
+		citations = append(citations, citation)
+	}
+	return citations
+}
