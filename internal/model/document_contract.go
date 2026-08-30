@@ -71,6 +71,24 @@ type StructuredChunk struct {
 	EvidenceIDs     []string `json:"evidenceIds"`
 }
 
+// ParserReceipt records the parser engine that produced a structured artifact.
+type ParserReceipt struct {
+	Engine       string `json:"engine"`
+	Version      string `json:"version,omitempty"`
+	OCRPerformed bool   `json:"ocrPerformed,omitempty"`
+}
+
+// ParsedDocument is the versioned artifact exchanged between Go and Python.
+type ParsedDocument struct {
+	SourceID        string            `json:"sourceId,omitempty"`
+	FileName        string            `json:"fileName,omitempty"`
+	DocumentVersion string            `json:"documentVersion"`
+	Modality        string            `json:"modality"`
+	ParserReceipt   ParserReceipt     `json:"parserReceipt"`
+	EvidenceUnits   []EvidenceUnit    `json:"evidenceUnits"`
+	Chunks          []StructuredChunk `json:"chunks"`
+}
+
 // Validate prevents a retrieval chunk from citing another document version.
 func (chunk StructuredChunk) Validate(evidenceByID map[string]EvidenceUnit) error {
 	if strings.TrimSpace(chunk.DocumentVersion) == "" {

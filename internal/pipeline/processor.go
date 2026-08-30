@@ -421,23 +421,27 @@ func (p *Processor) processParseExternal(ctx context.Context, task tasks.FilePro
 		objectURL = url
 	}
 
-	textContent, err := p.ingestionClient.Parse(ctx, task, objectURL)
+	parsedDocument, err := p.ingestionClient.Parse(ctx, task, objectURL)
 	if err != nil {
 		return fmt.Errorf("parse: external worker failed: %w", err)
 	}
-	if textContent == "" {
-		return errors.New("parse: extracted text is empty")
+	if len(parsedDocument.Chunks) == 0 {
+		return errors.New("parse: structured document has no chunks")
 	}
 
-	parsedObject := p.parsedObjectName(task.FileMD5)
-	reader := bytes.NewReader([]byte(textContent))
+	parsedObject := p.parsedObjectName(task.DocumentVersion)
+	parsedBytes, err := json.Marshal(parsedDocument)
+	if err != nil {
+		return fmt.Errorf("parse: encode structured artifact failed: %w", err)
+	}
+	reader := bytes.NewReader(parsedBytes)
 	if _, err := storage.MinioClient.PutObject(
 		ctx,
 		p.minioCfg.BucketName,
 		parsedObject,
 		reader,
 		reader.Size(),
-		minio.PutObjectOptions{ContentType: "text/plain; charset=utf-8"},
+		minio.PutObjectOptions{ContentType: "application/json"},
 	); err != nil {
 		return fmt.Errorf("parse: persist parsed text failed: %w", err)
 	}
@@ -448,7 +452,7 @@ func (p *Processor) processParseExternal(ctx context.Context, task tasks.FilePro
 	if err := kafka.ProduceTask(next); err != nil {
 		return fmt.Errorf("parse: enqueue chunk task failed: %w", err)
 	}
-	log.Infof("[Processor][parse] done file=%s text_len=%d worker=external", task.FileMD5, utf8.RuneCountInString(textContent))
+	log.Infof("[Processor][parse] done file=%s chunks=%d worker=external", task.FileMD5, len(parsedDocument.Chunks))
 	return nil
 }
 
@@ -458,7 +462,7 @@ func (p *Processor) processChunkExternal(ctx context.Context, task tasks.FilePro
 
 	parsedObject := task.ParsedObject
 	if parsedObject == "" {
-		parsedObject = p.parsedObjectName(task.FileMD5)
+		parsedObject = p.parsedObjectName(task.DocumentVersion)
 	}
 
 	object, err := storage.MinioClient.GetObject(ctx, p.minioCfg.BucketName, parsedObject, minio.GetObjectOptions{})
@@ -471,12 +475,12 @@ func (p *Processor) processChunkExternal(ctx context.Context, task tasks.FilePro
 	if err != nil {
 		return fmt.Errorf("chunk: read parsed stream failed: %w", err)
 	}
-	textContent := string(textBytes)
-	if textContent == "" {
-		return errors.New("chunk: parsed text is empty")
+	var parsedDocument model.ParsedDocument
+	if err := json.Unmarshal(textBytes, &parsedDocument); err != nil {
+		return fmt.Errorf("chunk: decode structured artifact failed: %w", err)
 	}
 
-	chunks, err := p.ingestionClient.Chunk(ctx, task, textContent, 1000, 100)
+	chunks, err := p.ingestionClient.Chunk(ctx, task, parsedDocument, 1000, 100)
 	if err != nil {
 		return fmt.Errorf("chunk: external worker failed: %w", err)
 	}
@@ -494,7 +498,7 @@ func (p *Processor) processChunkExternal(ctx context.Context, task tasks.FilePro
 		dbVectors = append(dbVectors, &model.DocumentVector{
 			FileMD5:      task.FileMD5,
 			ChunkID:      i,
-			TextContent:  chunk,
+			TextContent:  chunk.Text,
 			ModelVersion: p.embeddingCfg.Model,
 			UserID:       task.UserID,
 			OrgTag:       task.OrgTag,

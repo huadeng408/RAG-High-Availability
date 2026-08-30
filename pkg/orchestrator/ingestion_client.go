@@ -19,8 +19,8 @@ import (
 // IngestionClient defines the external ingestion worker client.
 type IngestionClient interface {
 	Enabled() bool
-	Parse(ctx context.Context, task tasks.FileProcessingTask, objectURL string) (string, error)
-	Chunk(ctx context.Context, task tasks.FileProcessingTask, text string, chunkSize, chunkOverlap int) ([]string, error)
+	Parse(ctx context.Context, task tasks.FileProcessingTask, objectURL string) (model.ParsedDocument, error)
+	Chunk(ctx context.Context, task tasks.FileProcessingTask, parsed model.ParsedDocument, chunkSize, chunkOverlap int) ([]model.StructuredChunk, error)
 	Embed(ctx context.Context, task tasks.FileProcessingTask, texts []string) ([][]float32, error)
 	Index(ctx context.Context, task tasks.FileProcessingTask, indexName string, docs []model.EsDocument) (int, error)
 }
@@ -31,12 +31,12 @@ type noopIngestionClient struct{}
 func (noopIngestionClient) Enabled() bool { return false }
 
 // Parse implements the disabled ingestion client behavior.
-func (noopIngestionClient) Parse(ctx context.Context, task tasks.FileProcessingTask, objectURL string) (string, error) {
-	return "", fmt.Errorf("external ingestion is disabled")
+func (noopIngestionClient) Parse(ctx context.Context, task tasks.FileProcessingTask, objectURL string) (model.ParsedDocument, error) {
+	return model.ParsedDocument{}, fmt.Errorf("external ingestion is disabled")
 }
 
 // Chunk implements the disabled ingestion client behavior.
-func (noopIngestionClient) Chunk(ctx context.Context, task tasks.FileProcessingTask, text string, chunkSize, chunkOverlap int) ([]string, error) {
+func (noopIngestionClient) Chunk(ctx context.Context, task tasks.FileProcessingTask, parsed model.ParsedDocument, chunkSize, chunkOverlap int) ([]model.StructuredChunk, error) {
 	return nil, fmt.Errorf("external ingestion is disabled")
 }
 
@@ -61,18 +61,18 @@ type parseRequest struct {
 }
 
 type parseResponse struct {
-	ParsedText string `json:"parsedText"`
+	ParsedDocument model.ParsedDocument `json:"parsedDocument"`
 }
 
 type chunkRequest struct {
-	Task         tasks.FileProcessingTask `json:"task"`
-	Text         string                   `json:"text"`
-	ChunkSize    int                      `json:"chunkSize"`
-	ChunkOverlap int                      `json:"chunkOverlap"`
+	Task           tasks.FileProcessingTask `json:"task"`
+	ParsedDocument model.ParsedDocument     `json:"parsedDocument"`
+	ChunkSize      int                      `json:"chunkSize"`
+	ChunkOverlap   int                      `json:"chunkOverlap"`
 }
 
 type chunkResponse struct {
-	Chunks []string `json:"chunks"`
+	Chunks []model.StructuredChunk `json:"chunks"`
 }
 
 type embedRequest struct {
@@ -115,28 +115,28 @@ func NewIngestionClient(cfg config.AIOrchestratorConfig) IngestionClient {
 func (c *httpIngestionClient) Enabled() bool { return true }
 
 // Parse delegates parse-stage execution to the external ingestion worker.
-func (c *httpIngestionClient) Parse(ctx context.Context, task tasks.FileProcessingTask, objectURL string) (string, error) {
+func (c *httpIngestionClient) Parse(ctx context.Context, task tasks.FileProcessingTask, objectURL string) (model.ParsedDocument, error) {
 	resp, err := c.doJSON(ctx, "/v1/ingestion/parse", parseRequest{
 		Task:      task,
 		ObjectURL: objectURL,
 	})
 	if err != nil {
-		return "", err
+		return model.ParsedDocument{}, err
 	}
 	var parsed parseResponse
 	if err := json.Unmarshal(resp, &parsed); err != nil {
-		return "", err
+		return model.ParsedDocument{}, err
 	}
-	return parsed.ParsedText, nil
+	return parsed.ParsedDocument, nil
 }
 
 // Chunk delegates chunk-stage execution to the external ingestion worker.
-func (c *httpIngestionClient) Chunk(ctx context.Context, task tasks.FileProcessingTask, text string, chunkSize, chunkOverlap int) ([]string, error) {
+func (c *httpIngestionClient) Chunk(ctx context.Context, task tasks.FileProcessingTask, parsedDocument model.ParsedDocument, chunkSize, chunkOverlap int) ([]model.StructuredChunk, error) {
 	resp, err := c.doJSON(ctx, "/v1/ingestion/chunk", chunkRequest{
-		Task:         task,
-		Text:         text,
-		ChunkSize:    chunkSize,
-		ChunkOverlap: chunkOverlap,
+		Task:           task,
+		ParsedDocument: parsedDocument,
+		ChunkSize:      chunkSize,
+		ChunkOverlap:   chunkOverlap,
 	})
 	if err != nil {
 		return nil, err
