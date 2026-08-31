@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any
 
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
+from starlette.responses import StreamingResponse
 
 app = FastAPI(title="RHA deterministic model stub")
 
@@ -61,10 +63,40 @@ def rerank(payload: RerankRequest) -> dict[str, Any]:
     return {"model": payload.model, "latency_ms": 0.0, "results": ranked[: payload.top_n]}
 
 
-@app.post("/v1/chat/completions")
-def chat(payload: ChatRequest) -> dict[str, Any]:
+@app.post("/v1/chat/completions", response_model=None)
+def chat(payload: ChatRequest) -> dict[str, Any] | StreamingResponse:
+    answer = "依据 RHA fixture：保留期限为七年。"
+    if payload.stream:
+        return StreamingResponse(_stream_chat_events(answer), media_type="text/event-stream")
+
     return {
         "id": "rha-fixture-chat-1",
         "object": "chat.completion",
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": "依据 RHA fixture：保留期限为七年。"}, "finish_reason": "stop"}],
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": answer}, "finish_reason": "stop"}],
     }
+
+
+def _stream_chat_events(answer: str):
+    pieces = [answer[:8], answer[8:14], answer[14:]]
+    for index, piece in enumerate(pieces):
+        delta: dict[str, str] = {"content": piece}
+        if index == 0:
+            delta["role"] = "assistant"
+        event = {
+            "id": "rha-fixture-chat-stream-1",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "rha-fixture-chat",
+            "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
+        }
+        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    finish_event = {
+        "id": "rha-fixture-chat-stream-1",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "rha-fixture-chat",
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+    }
+    yield f"data: {json.dumps(finish_event, ensure_ascii=False)}\n\n"
+    yield "data: [DONE]\n\n"

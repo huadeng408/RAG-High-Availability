@@ -244,7 +244,7 @@ def fetch_pipeline_states(mysql_cfg: dict[str, object], file_md5s: list[str]) ->
     if not file_md5s:
         return {}
     placeholders = ",".join(["%s"] * len(file_md5s))
-    sql = (
+    legacy_sql = (
         f"SELECT file_md5, stage, status FROM pipeline_task "
         f"WHERE file_md5 IN ({placeholders}) AND stage IN ('parse','chunk','embed','index')"
     )
@@ -255,9 +255,36 @@ def fetch_pipeline_states(mysql_cfg: dict[str, object], file_md5s: list[str]) ->
         return out
     try:
         with conn.cursor() as cur:
-            cur.execute(sql, file_md5s)
+            cur.execute(legacy_sql, file_md5s)
             for file_md5, stage, status in cur.fetchall():
                 out[str(file_md5)][str(stage)] = str(status)
+
+            source_ids = [f"upload:{file_md5}" for file_md5 in file_md5s]
+            source_sql = (
+                "SELECT document_version, source_id FROM document_versions "
+                f"WHERE source_id IN ({','.join(['%s'] * len(source_ids))})"
+            )
+            cur.execute(source_sql, source_ids)
+            version_to_md5: dict[str, str] = {}
+            for document_version, source_id in cur.fetchall():
+                file_md5 = str(source_id).removeprefix("upload:")
+                if file_md5 in out:
+                    version_to_md5[str(document_version)] = file_md5
+
+            version_to_md5.update({f"upload:{file_md5}": file_md5 for file_md5 in file_md5s})
+            versions = list(version_to_md5)
+            if versions:
+                version_placeholders = ",".join(["%s"] * len(versions))
+                version_sql = (
+                    f"SELECT document_version, stage, status FROM pipeline_task "
+                    f"WHERE document_version IN ({version_placeholders}) "
+                    "AND stage IN ('parse','chunk','embed','index')"
+                )
+                cur.execute(version_sql, versions)
+                for document_version, stage, status in cur.fetchall():
+                    file_md5 = version_to_md5.get(str(document_version))
+                    if file_md5 in out:
+                        out[file_md5][str(stage)] = str(status)
     except Exception:
         pass
     finally:
@@ -268,17 +295,17 @@ def fetch_pipeline_states(mysql_cfg: dict[str, object], file_md5s: list[str]) ->
 def fetch_indexed_ids(es_base_url: str, index_name: str, file_md5s: list[str]) -> set[str]:
     if not file_md5s:
         return set()
-    ids = [f"{file_md5}_0" for file_md5 in file_md5s]
     resp = requests.post(
-        f"{es_base_url.rstrip('/')}/{index_name}/_mget",
-        json={"ids": ids},
+        f"{es_base_url.rstrip('/')}/{index_name}/_search",
+        json={"query": {"terms": {"file_md5": file_md5s}}, "size": len(file_md5s)},
         timeout=300,
     )
     resp.raise_for_status()
     indexed: set[str] = set()
-    for doc in resp.json().get("docs", []):
-        if doc.get("found") and isinstance(doc.get("_id"), str):
-            indexed.add(doc["_id"].split("_", 1)[0])
+    for doc in resp.json().get("hits", {}).get("hits", []):
+        file_md5 = doc.get("_source", {}).get("file_md5")
+        if isinstance(file_md5, str):
+            indexed.add(file_md5)
     return indexed
 
 
@@ -298,7 +325,7 @@ def main() -> None:
     parser.add_argument("--password", default="RHAUpload!2026")
     parser.add_argument("--count", type=int, default=120)
     parser.add_argument("--upload-concurrency", type=int, default=4)
-    parser.add_argument("--knowledge-index", default="knowledge_base_e2e_512")
+    parser.add_argument("--knowledge-index", default="rha-knowledge-active")
     parser.add_argument("--mysql-host", default="127.0.0.1")
     parser.add_argument("--mysql-port", type=int, default=3307)
     parser.add_argument("--mysql-user", default="root")

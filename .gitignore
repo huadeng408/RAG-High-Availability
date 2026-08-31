@@ -8,6 +8,7 @@
 /.venv-local-ai-cpython
 /bin
 /ai-orchestrator/.venv
+/ai-orchestrator/.env
 /CLAUDE.md
 /text.py
 /homepage

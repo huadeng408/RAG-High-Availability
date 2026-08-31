@@ -41,7 +41,12 @@ class MemoryTaskService:
             ),
             user_prompt=_render_conversation(history),
         )
-        parsed = _parse_json_response(raw, MemorySummaryResponsePayload)
+        try:
+            parsed = _parse_json_response(raw, MemorySummaryResponsePayload)
+        except Exception as exc:
+            # A malformed planner response must not break a later multi-turn chat request.
+            log_request("memory_summarize_degraded", error_type=type(exc).__name__)
+            return MemorySummaryResponsePayload()
         parsed.facts = _normalize_string_list(parsed.facts)[: max(1, payload.workingMaxFacts)]
         parsed.entities = _normalize_string_list(parsed.entities)
         parsed.profile_updates = _normalize_profile_updates(parsed.profile_updates)
@@ -72,7 +77,12 @@ class MemoryTaskService:
             ),
             user_prompt="\n\n".join(prompt_parts),
         )
-        parsed = _parse_json_response(raw, MemoryWriteResponsePayload)
+        try:
+            parsed = _parse_json_response(raw, MemoryWriteResponsePayload)
+        except Exception as exc:
+            # A malformed planner response must not turn post-turn memory into a user-visible failure.
+            log_request("memory_extract_degraded", error_type=type(exc).__name__)
+            return MemoryWriteResponsePayload()
         parsed.memory_type = _normalize_memory_type(parsed.memory_type)
         parsed.entities = _normalize_string_list(parsed.entities)
         parsed.importance = max(0.0, min(1.0, parsed.importance))

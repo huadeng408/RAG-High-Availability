@@ -1,21 +1,21 @@
 {
-  "name": "pi-smart",
+  "name": "rha-frontend",
   "type": "module",
   "version": "1.3.13",
   "description": "RHA",
   "author": {
     "name": "RHA",
-    "url": "https://github.com/itwanger/RHA.git"
+    "url": "https://github.com/huadeng408/RAG-High-Availability"
   },
   "license": "MIT",
-  "homepage": "https://github.com/itwanger/RHA.git",
+  "homepage": "https://github.com/huadeng408/RAG-High-Availability",
   "repository": {
-    "url": "https://github.com/itwanger/RHA.git"
+    "url": "https://github.com/huadeng408/RAG-High-Availability.git"
   },
   "bugs": {
-    "url": "https://github.com/itwanger/RHA/issues"
+    "url": "https://github.com/huadeng408/RAG-High-Availability/issues"
   },
-  "keywords": ["ai", "rag", "llm", "chat", "itwanger", "rha"],
+  "keywords": ["ai", "rag", "llm", "chat", "rha"],
   "engines": {
     "node": ">=18.20.0",
     "pnpm": ">=8.7.0"
@@ -110,5 +110,5 @@
     "commit-msg": "pnpm sa git-commit-verify",
     "pre-commit": "cd frontend && pnpm typecheck && pnpm lint && git diff --exit-code"
   },
-  "website": "https://github.com/itwanger/RHA.git"
+  "website": "https://github.com/huadeng408/RAG-High-Availability"
 }

@@ -105,11 +105,31 @@ def main() -> None:
                 payload={
                     "task": {
                         "file_md5": "smoke-md5",
+                        "document_version": "smoke-version",
                         "file_name": "smoke.txt",
                         "user_id": 1,
                         "stage": "chunk",
                     },
-                    "text": "第一段内容。\n\n第二段内容。\n\n第三段内容。",
+                    "parsedDocument": {
+                        "sourceId": "smoke-source",
+                        "fileName": "smoke.txt",
+                        "documentVersion": "smoke-version",
+                        "modality": "text",
+                        "parserReceipt": {"engine": "fixture-text", "version": "1"},
+                        "evidenceUnits": [
+                            {
+                                "evidenceId": "smoke-version:text:1",
+                                "documentVersion": "smoke-version",
+                                "modality": "text",
+                                "elementType": "text",
+                                "text": "第一段内容。\n\n第二段内容。\n\n第三段内容。",
+                                "parserName": "fixture-text",
+                                "parserVersion": "1",
+                                "assetPath": "testdata/smoke.txt",
+                            }
+                        ],
+                        "chunks": [],
+                    },
                     "chunkSize": 16,
                     "chunkOverlap": 4,
                 },
