@@ -71,5 +71,5 @@ curl -fsS http://127.0.0.1:8080/healthz >/dev/null
   --kafka-bootstrap-server "${RHA_E2E_KAFKA_BOOTSTRAP_SERVER:-kafka:29092}" \
   --kafka-dlq-topic "${RHA_E2E_KAFKA_DLQ_TOPIC:-file-dlq}" \
   --admin-username "${RHA_E2E_ADMIN_USERNAME:-admin}" \
-  --admin-password "${RHA_E2E_ADMIN_PASSWORD:-admin123}"
+  --admin-password "${RHA_E2E_ADMIN_PASSWORD:?RHA_E2E_ADMIN_PASSWORD must be set for replay E2E}"
 "$PYTHON_BIN" "$VERIFY_PATH" --report "$REPORT_ARG"

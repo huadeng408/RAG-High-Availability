@@ -115,12 +115,27 @@ def runtime_report() -> dict:
         },
     }
     report["recovery"] = {
+        "upload": {
+            "fileMd5": "fedcba9876543210fedcba9876543210",
+            "fileName": "rha-recovery.png",
+            "chunkCount": 1,
+            "chunkRequests": [
+                {"chunkIndex": 0, "statusCode": 200},
+                {"chunkIndex": 0, "statusCode": 200},
+            ],
+            "merge": {"statusCode": 200},
+        },
         "stage": "embed",
         "dlqMessageId": "d" * 64,
         "dlq": {
             "topic": "file-dlq",
             "messageId": "d" * 64,
-            "payload": {"stage": "embed", "file_md5": "fedcba9876543210fedcba9876543210"},
+            "payload": {
+                "stage": "embed",
+                "file_md5": "fedcba9876543210fedcba9876543210",
+                "document_version": "image-version",
+                "dlq_id": "d" * 64,
+            },
         },
         "replay": {
             "statusCode": 200,
@@ -440,6 +455,46 @@ class VerifyRhaE2ETest(unittest.TestCase):
             path = Path(directory) / "report.json"
             path.write_text(json.dumps(report), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "DLQ"):
+                VERIFY_MODULE.verify(path)
+
+    def test_rejects_recovery_when_dlq_payload_id_does_not_match(self) -> None:
+        report = recovery_report()
+        report["recovery"]["dlq"]["payload"]["dlq_id"] = "e" * 64
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "payload.*dlq_id"):
+                VERIFY_MODULE.verify(path)
+
+    def test_rejects_recovery_when_dlq_payload_file_md5_does_not_match(self) -> None:
+        report = recovery_report()
+        report["recovery"]["dlq"]["payload"]["file_md5"] = report["upload"]["fileMd5"]
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "payload.*fileMd5"):
+                VERIFY_MODULE.verify(path)
+
+    def test_rejects_recovery_when_dlq_payload_document_version_does_not_match(self) -> None:
+        report = recovery_report()
+        report["recovery"]["dlq"]["payload"]["document_version"] = "old-version"
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "payload.*documentVersion"):
+                VERIFY_MODULE.verify(path)
+
+    def test_rejects_recovery_without_all_four_successful_stages(self) -> None:
+        report = recovery_report()
+        report["recovery"]["pipeline"]["stages"] = report["recovery"]["pipeline"]["stages"][:-1]
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "recovery.*stages"):
                 VERIFY_MODULE.verify(path)
 
     def test_rejects_recovery_when_replay_result_is_incorrect(self) -> None:

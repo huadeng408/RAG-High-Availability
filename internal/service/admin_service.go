@@ -53,15 +53,18 @@ type AdminService interface {
 	AssignOrgTagsToUser(userID uint, orgTags []string) error
 	ListUsers(page, size int) (*UserListResponse, error)
 	GetAllConversations(ctx context.Context, userID *uint, startTime, endTime *time.Time) ([]map[string]interface{}, error)
-	ReplayPipelineTask(fileMD5 string, stage tasks.Stage) (*PipelineReplayResult, error)
+	ReplayPipelineTask(fileMD5, documentVersion string, stage tasks.Stage, windowID, dlqMessageID string) (*PipelineReplayResult, error)
 }
 
 // PipelineReplayResult identifies the durable dead-letter tasks accepted for replay.
 type PipelineReplayResult struct {
-	FileMD5       string      `json:"fileMd5"`
-	Stage         tasks.Stage `json:"stage"`
-	ReplayedTasks int         `json:"replayedTasks"`
-	MessageIDs    []string    `json:"messageIds"`
+	FileMD5         string      `json:"fileMd5"`
+	DocumentVersion string      `json:"documentVersion"`
+	Stage           tasks.Stage `json:"stage"`
+	WindowID        string      `json:"windowId"`
+	DLQMessageID    string      `json:"dlqMessageId"`
+	ReplayedTasks   int         `json:"replayedTasks"`
+	MessageIDs      []string    `json:"messageIds"`
 }
 
 // adminService implements admin operations.
@@ -347,13 +350,25 @@ func (s *adminService) getConversationsForUser(ctx context.Context, user *model.
 }
 
 // ReplayPipelineTask handles replay pipeline task.
-func (s *adminService) ReplayPipelineTask(fileMD5 string, stage tasks.Stage) (*PipelineReplayResult, error) {
+func (s *adminService) ReplayPipelineTask(fileMD5, documentVersion string, stage tasks.Stage, windowID, dlqMessageID string) (*PipelineReplayResult, error) {
 	fileMD5 = strings.TrimSpace(fileMD5)
+	documentVersion = strings.TrimSpace(documentVersion)
+	windowID = strings.TrimSpace(windowID)
+	dlqMessageID = strings.TrimSpace(dlqMessageID)
 	if fileMD5 == "" {
 		return nil, errors.New("fileMd5 cannot be empty")
 	}
+	if documentVersion == "" {
+		return nil, errors.New("documentVersion cannot be empty")
+	}
+	if windowID == "" {
+		return nil, errors.New("windowId cannot be empty")
+	}
+	if dlqMessageID == "" {
+		return nil, errors.New("dlqMessageId cannot be empty")
+	}
 	if stage == "" {
-		stage = tasks.StageParse
+		return nil, errors.New("stage cannot be empty")
 	}
 	if stage != tasks.StageParse && stage != tasks.StageChunk && stage != tasks.StageEmbed && stage != tasks.StageIndex {
 		return nil, fmt.Errorf("unsupported stage: %s", stage)
@@ -367,18 +382,24 @@ func (s *adminService) ReplayPipelineTask(fileMD5 string, stage tasks.Stage) (*P
 	if err != nil {
 		return nil, err
 	}
-	result := &PipelineReplayResult{FileMD5: fileMD5, Stage: stage, MessageIDs: []string{}}
+	result := &PipelineReplayResult{
+		FileMD5: fileMD5, DocumentVersion: documentVersion, Stage: stage, WindowID: windowID,
+		DLQMessageID: dlqMessageID, MessageIDs: []string{},
+	}
 	producer := s.produceTask
 	if producer == nil {
 		producer = kafka.ProduceTask
 	}
 	for _, failed := range failedTasks {
-		if failed.Stage != string(stage) || failed.DLQMessageID == "" || failed.DLQPayload == "" {
+		if failed.FileMD5 != fileMD5 || failed.DocumentVersion != documentVersion || failed.Stage != string(stage) || failed.WindowID != windowID || failed.DLQMessageID != dlqMessageID || failed.DLQPayload == "" {
 			continue
 		}
 		var task tasks.FileProcessingTask
 		if err := json.Unmarshal([]byte(failed.DLQPayload), &task); err != nil {
 			return result, fmt.Errorf("decode DLQ payload %s: %w", failed.DLQMessageID, err)
+		}
+		if task.DLQID != dlqMessageID || task.FileMD5 != fileMD5 || task.DocumentVersion != documentVersion || task.Stage != stage || task.WindowID != windowID {
+			return result, fmt.Errorf("DLQ payload identity does not match selected task %s", dlqMessageID)
 		}
 		task.FileMD5 = uploadRecord.FileMD5
 		task.FileName = uploadRecord.FileName

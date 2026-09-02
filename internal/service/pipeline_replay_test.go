@@ -77,7 +77,7 @@ func TestReplayPipelineTaskPublishesPersistedVersionedDLQEnvelope(t *testing.T) 
 		},
 	}
 
-	result, err := service.ReplayPipelineTask("0123456789abcdef0123456789abcdef", tasks.StageEmbed)
+	result, err := service.ReplayPipelineTask("0123456789abcdef0123456789abcdef", "version-sha", tasks.StageEmbed, "window-2", messageID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestReplayPipelineTaskRestoresDeadLetterWhenKafkaPublishFails(t *testing.T)
 		produceTask: func(tasks.FileProcessingTask) error { return errors.New("broker unavailable") },
 	}
 
-	result, err := service.ReplayPipelineTask("0123456789abcdef0123456789abcdef", tasks.StageEmbed)
+	result, err := service.ReplayPipelineTask("0123456789abcdef0123456789abcdef", "version-sha", tasks.StageEmbed, "window-1", messageID)
 	if err == nil || result == nil {
 		t.Fatalf("result=%#v err=%v, want partial result and publish error", result, err)
 	}
@@ -140,5 +140,36 @@ func TestReplayPipelineTaskRestoresDeadLetterWhenKafkaPublishFails(t *testing.T)
 	}
 	if got := pipelineRepo.restored[0]; !strings.Contains(got, "replay publish failed: broker unavailable") || !strings.Contains(got, messageID) {
 		t.Fatalf("restored envelope = %q", got)
+	}
+}
+
+func TestReplayPipelineTaskRequiresExactDurableIdentity(t *testing.T) {
+	now := time.Now()
+	selectedID := "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	otherID := "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	failed := func(windowID, messageID string) model.PipelineTask {
+		payload := `{"file_md5":"0123456789abcdef0123456789abcdef","document_version":"version-sha","window_id":"` + windowID + `","file_name":"recovery.png","stage":"embed","dlq_id":"` + messageID + `"}`
+		return model.PipelineTask{
+			FileMD5: "0123456789abcdef0123456789abcdef", DocumentVersion: "version-sha", Stage: "embed", WindowID: windowID,
+			Status: model.PipelineStatusFailed, DLQMessageID: messageID, DLQPayload: payload, DeadLetteredAt: &now,
+		}
+	}
+	pipelineRepo := &replayPipelineRepository{failed: []model.PipelineTask{failed("window-1", otherID), failed("window-2", selectedID)}}
+	var produced []tasks.FileProcessingTask
+	service := &adminService{
+		pipelineTaskRepo: pipelineRepo,
+		uploadRepo:       replayUploadRepository{record: &model.FileUpload{FileMD5: "0123456789abcdef0123456789abcdef", FileName: "recovery.png"}},
+		produceTask:      func(task tasks.FileProcessingTask) error { produced = append(produced, task); return nil },
+	}
+
+	result, err := service.ReplayPipelineTask("0123456789abcdef0123456789abcdef", "version-sha", tasks.StageEmbed, "window-2", selectedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ReplayedTasks != 1 || len(produced) != 1 || produced[0].WindowID != "window-2" {
+		t.Fatalf("replayed wrong durable task: result=%#v produced=%#v", result, produced)
+	}
+	if len(pipelineRepo.resetKeys) != 1 || !strings.HasSuffix(pipelineRepo.resetKeys[0], ":window-2") {
+		t.Fatalf("reset keys = %#v", pipelineRepo.resetKeys)
 	}
 }

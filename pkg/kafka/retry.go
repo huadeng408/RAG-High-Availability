@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -14,6 +15,10 @@ const maxRetryBackoff = 5 * time.Second
 
 type deadLetterTracker interface {
 	MarkDeadLetterByKey(fileMD5, documentVersion, stage, windowID, lastError, payload, messageID string) error
+}
+
+type deadLetterLookup interface {
+	GetDeadLetterByKey(fileMD5, documentVersion, stage, windowID string) (payload, messageID string, err error)
 }
 
 type taskPublisher func(tasks.FileProcessingTask) error
@@ -74,6 +79,30 @@ func handoffFailedTask(
 		task.LastError = processingErr.Error()
 		task.DLQID = ""
 		return retryPublisher(task)
+	}
+	if lookup, ok := tracker.(deadLetterLookup); ok {
+		storedPayload, storedMessageID, lookupErr := lookup.GetDeadLetterByKey(
+			task.FileMD5, documentVersion, string(task.Stage), windowID,
+		)
+		if lookupErr != nil {
+			return lookupErr
+		}
+		if storedPayload != "" && storedMessageID != "" {
+			var storedTask tasks.FileProcessingTask
+			if err := json.Unmarshal([]byte(storedPayload), &storedTask); err != nil {
+				return err
+			}
+			if storedTask.FileMD5 != task.FileMD5 || storedTask.DocumentVersion != documentVersion || storedTask.Stage != task.Stage || storedTask.WindowID != windowID {
+				return fmt.Errorf("persisted DLQ envelope identity does not match task")
+			}
+			if storedTask.DLQID != "" && storedTask.DLQID != storedMessageID {
+				return fmt.Errorf("persisted DLQ envelope message ID does not match durable record")
+			}
+			if storedTask.DLQID == "" {
+				storedTask.DLQID = storedMessageID
+			}
+			return dlqPublisher(storedTask)
+		}
 	}
 
 	deadLetter, payload, err := buildDeadLetterTask(

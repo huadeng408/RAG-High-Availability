@@ -23,6 +23,7 @@ type capturedDeadLetter struct {
 type deadLetterTrackerStub struct {
 	captured []capturedDeadLetter
 	err      error
+	stored   *capturedDeadLetter
 }
 
 func (s *deadLetterTrackerStub) MarkDeadLetterByKey(
@@ -38,6 +39,13 @@ func (s *deadLetterTrackerStub) MarkDeadLetterByKey(
 		messageID:       messageID,
 	})
 	return s.err
+}
+
+func (s *deadLetterTrackerStub) GetDeadLetterByKey(fileMD5, documentVersion, stage, windowID string) (string, string, error) {
+	if s.stored == nil || s.stored.fileMD5 != fileMD5 || s.stored.documentVersion != documentVersion || s.stored.stage != stage || s.stored.windowID != windowID {
+		return "", "", nil
+	}
+	return s.stored.payload, s.stored.messageID, nil
 }
 
 func TestRetryDelayCapsAtFiveSeconds(t *testing.T) {
@@ -144,6 +152,34 @@ func TestHandoffFailedTaskPersistsExactEnvelopeBeforeDLQPublish(t *testing.T) {
 	}
 }
 
+func TestHandoffFailedTaskRepublishesPersistedEnvelopeWithoutRecreatingDLQ(t *testing.T) {
+	messageID := "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	payload := `{"file_md5":"0123456789abcdef0123456789abcdef","file_name":"recovery.png","stage":"embed","document_version":"version-sha","window_id":"window-1","dlq_id":"` + messageID + `","attempt":4,"last_error":"stored failure"}`
+	tracker := &deadLetterTrackerStub{stored: &capturedDeadLetter{
+		fileMD5: "0123456789abcdef0123456789abcdef", documentVersion: "version-sha", stage: "embed", windowID: "window-1", payload: payload, messageID: messageID,
+	}}
+	var published tasks.FileProcessingTask
+	err := handoffFailedTask(
+		tracker,
+		tasks.FileProcessingTask{FileMD5: "0123456789abcdef0123456789abcdef", FileName: "recovery.png", Stage: tasks.StageEmbed, TaskChunkID: 1},
+		"version-sha", "window-1", 4, 3, errors.New("new failure"),
+		func(tasks.FileProcessingTask) error {
+			t.Fatal("persisted terminal failure must not use retry topic")
+			return nil
+		},
+		func(task tasks.FileProcessingTask) error { published = task; return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tracker.captured) != 0 {
+		t.Fatalf("persisted DLQ was recreated: %#v", tracker.captured)
+	}
+	if published.DLQID != messageID || published.LastError != "stored failure" || published.Attempt != 4 {
+		t.Fatalf("republished task did not preserve stored envelope: %#v", published)
+	}
+}
+
 func TestConsumerReaderConfigAcceptsSmallMessages(t *testing.T) {
 	got := consumerReaderConfig(config.KafkaConfig{}, "file-parse", "rha-test-parse")
 
@@ -152,5 +188,51 @@ func TestConsumerReaderConfigAcceptsSmallMessages(t *testing.T) {
 	}
 	if got.MaxBytes != 10e6 {
 		t.Fatalf("consumer MaxBytes = %d, want 10MB", got.MaxBytes)
+	}
+}
+
+func TestPipelineWindowIDDerivesEmbedWindowFromTaskChunk(t *testing.T) {
+	got := pipelineWindowID(tasks.FileProcessingTask{Stage: tasks.StageEmbed, TaskChunkID: 3, WindowID: "window-1"})
+	if got != "window-3" {
+		t.Fatalf("embed window ID = %q, want window-3", got)
+	}
+}
+
+func TestMalformedKafkaMessagePublishesToDLQBeforeCommit(t *testing.T) {
+	var events []string
+	err := handleMalformedMessage([]byte("not-json"), func(payload []byte) error {
+		events = append(events, "publish:"+string(payload))
+		return nil
+	}, func() error {
+		events = append(events, "commit")
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := events, []string{"publish:not-json", "commit"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("events = %#v, want %#v", got, want)
+	}
+}
+
+func TestMalformedKafkaMessageDoesNotCommitWhenDLQPublishFails(t *testing.T) {
+	committed := false
+	err := handleMalformedMessage([]byte("not-json"), func([]byte) error { return errors.New("dlq unavailable") }, func() error {
+		committed = true
+		return nil
+	})
+	if err == nil || committed {
+		t.Fatalf("err=%v committed=%v, want publish error and no commit", err, committed)
+	}
+}
+
+func TestSuccessfulKafkaMessageDoesNotCommitWhenStatePersistenceFails(t *testing.T) {
+	committed := false
+	err := handleSuccessfulMessage(func() error { return errors.New("database unavailable") }, func() error {
+		committed = true
+		return nil
+	})
+	if err == nil || committed {
+		t.Fatalf("err=%v committed=%v, want persistence error and no commit", err, committed)
 	}
 }

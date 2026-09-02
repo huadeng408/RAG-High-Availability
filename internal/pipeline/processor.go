@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -109,6 +110,9 @@ func (p *Processor) processParse(ctx context.Context, task tasks.FileProcessingT
 
 	if p.ingestionClient != nil && p.ingestionClient.Enabled() {
 		return p.processParseExternal(ctx, task)
+	}
+	if strings.EqualFold(filepath.Ext(task.FileName), ".pdf") {
+		return errors.New("parse: PDF requires structured ingestion with MinerU and OCR")
 	}
 
 	objectName := objectpath.MergedObjectName(task.FileMD5, task.FileName)
@@ -223,6 +227,7 @@ func (p *Processor) processChunk(ctx context.Context, task tasks.FileProcessingT
 	next.Stage = tasks.StageEmbed
 	next.ParsedObject = parsedObject
 	next.TaskChunkID = 1
+	next.WindowID = "window-1"
 	next.ChunkStart = 0
 	next.TotalChunks = len(chunks)
 	if err := kafka.ProduceTask(next); err != nil {
@@ -342,6 +347,7 @@ func (p *Processor) processEmbed(ctx context.Context, task tasks.FileProcessingT
 		next := task
 		next.Stage = tasks.StageEmbed
 		next.TaskChunkID = taskChunkID + 1
+		next.WindowID = fmt.Sprintf("window-%d", next.TaskChunkID)
 		next.ChunkStart = nextStart
 		next.TotalChunks = totalChunks
 		if err := kafka.ProduceTask(next); err != nil {
@@ -447,14 +453,10 @@ func (p *Processor) processParseExternal(ctx context.Context, task tasks.FilePro
 	if err != nil {
 		return fmt.Errorf("parse: create document version failed: %w", err)
 	}
-	objectURL := task.ObjectURL
-	if strings.TrimSpace(objectURL) == "" {
-		objectName := objectpath.MergedObjectName(task.FileMD5, task.FileName)
-		url, err := storage.GetPresignedURL(p.minioCfg.BucketName, objectName, time.Hour)
-		if err != nil {
-			return fmt.Errorf("parse: generate presigned url failed: %w", err)
-		}
-		objectURL = url
+	objectName := objectpath.MergedObjectName(task.FileMD5, task.FileName)
+	objectURL, err := storage.GetPresignedURL(p.minioCfg.BucketName, objectName, time.Hour)
+	if err != nil {
+		return fmt.Errorf("parse: generate presigned url failed: %w", err)
 	}
 
 	parsedDocument, err := p.ingestionClient.Parse(ctx, task, objectURL)
@@ -552,6 +554,7 @@ func (p *Processor) processChunkExternal(ctx context.Context, task tasks.FilePro
 	next.Stage = tasks.StageEmbed
 	next.ParsedObject = parsedObject
 	next.TaskChunkID = 1
+	next.WindowID = "window-1"
 	next.ChunkStart = 0
 	next.TotalChunks = len(chunks)
 	if err := kafka.ProduceTask(next); err != nil {
@@ -664,6 +667,7 @@ func (p *Processor) processEmbedExternal(ctx context.Context, task tasks.FilePro
 		next := task
 		next.Stage = tasks.StageEmbed
 		next.TaskChunkID = taskChunkID + 1
+		next.WindowID = fmt.Sprintf("window-%d", next.TaskChunkID)
 		next.ChunkStart = nextStart
 		next.TotalChunks = totalChunks
 		if err := kafka.ProduceTask(next); err != nil {
@@ -776,6 +780,7 @@ func (p *Processor) enqueueIndexTask(task tasks.FileProcessingTask, totalChunks 
 	next := task
 	next.Stage = tasks.StageIndex
 	next.TaskChunkID = 0
+	next.WindowID = "root"
 	next.ChunkStart = 0
 	next.TotalChunks = totalChunks
 	if err := kafka.ProduceTask(next); err != nil {

@@ -158,8 +158,16 @@ def _verify_recovery(report: dict) -> None:
     if envelope.get("topic") != "file-dlq" or envelope.get("messageId") != dlq_id:
         raise ValueError("recovery DLQ envelope message ID must match recovery.dlqMessageId")
     payload = envelope.get("payload") or {}
-    if payload.get("stage") != stage or not (payload.get("fileMd5") or payload.get("file_md5")):
-        raise ValueError("recovery DLQ payload must identify the failed stage and file")
+    recovery_upload = recovery.get("upload") or {}
+    expected_file_md5 = str(recovery_upload.get("fileMd5", ""))
+    if payload.get("stage") != stage:
+        raise ValueError("recovery DLQ payload must identify the failed stage")
+    payload_dlq_id = str(payload.get("dlq_id") or payload.get("dlqMessageId") or "")
+    if payload_dlq_id != dlq_id:
+        raise ValueError("recovery DLQ payload dlq_id must match recovery.dlqMessageId")
+    payload_file_md5 = str(payload.get("fileMd5") or payload.get("file_md5") or "")
+    if not expected_file_md5 or payload_file_md5 != expected_file_md5:
+        raise ValueError("recovery DLQ payload fileMd5 must match the selected recovery upload")
 
     replay = recovery.get("replay") or {}
     replay_ids = [str(value) for value in replay.get("messageIds") or []]
@@ -173,9 +181,18 @@ def _verify_recovery(report: dict) -> None:
     pipeline = recovery.get("pipeline") or {}
     if pipeline.get("status") != "SEARCHABLE":
         raise ValueError("recovery replay pipeline must become SEARCHABLE")
-    if not pipeline.get("documentVersion"):
+    expected_document_version = str(pipeline.get("documentVersion", ""))
+    if not expected_document_version:
         raise ValueError("recovery replay pipeline documentVersion is required")
+    payload_document_version = str(payload.get("documentVersion") or payload.get("document_version") or "")
+    if payload_document_version != expected_document_version:
+        raise ValueError("recovery DLQ payload documentVersion must match the replay pipeline")
     stages = {item.get("stage"): item for item in pipeline.get("stages") or []}
+    if set(stages) != REQUIRED_STAGES or any(
+        stages[required].get("status") != "SUCCESS" or int(stages[required].get("attemptCount", 0)) < 1
+        for required in REQUIRED_STAGES
+    ):
+        raise ValueError("recovery pipeline.stages must contain four successful runtime stages")
     embed = stages.get(stage) or {}
     if embed.get("status") != "SUCCESS" or int(embed.get("replayCount", 0)) < 1:
         raise ValueError("recovery replay stage must be successful with replay metadata")

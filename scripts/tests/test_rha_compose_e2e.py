@@ -84,6 +84,7 @@ printf '%s\\n' "python $*" >> "$RHA_TEST_LOG"
                     f"RHA_TEST_LOG={shlex.quote(log_shell)}",
                     f"RHA_E2E_PYTHON={shlex.quote(bin_shell + '/python.exe')}",
                     f"RHA_E2E_REPORT={shlex.quote(report_shell)}",
+                    "RHA_E2E_ADMIN_PASSWORD=compose-admin-password",
                     "bash",
                     shlex.quote(root_shell + "/scripts/run_rha_e2e.sh"),
                 ]

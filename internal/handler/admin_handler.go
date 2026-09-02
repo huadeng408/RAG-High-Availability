@@ -230,15 +230,24 @@ func (h *AdminHandler) DeleteOrganizationTag(c *gin.Context) {
 // ReplayPipelineTask handles replay pipeline task.
 func (h *AdminHandler) ReplayPipelineTask(c *gin.Context) {
 	var req struct {
-		FileMD5 string `json:"fileMd5" binding:"required"`
-		Stage   string `json:"stage"`
+		FileMD5         string `json:"fileMd5" binding:"required"`
+		DocumentVersion string `json:"documentVersion" binding:"required"`
+		Stage           string `json:"stage" binding:"required"`
+		WindowID        string `json:"windowId" binding:"required"`
+		DLQMessageID    string `json:"dlqMessageId" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": http.StatusBadRequest, "message": "无效请求参数", "data": nil})
 		return
 	}
 
-	result, err := h.adminService.ReplayPipelineTask(req.FileMD5, tasks.Stage(req.Stage))
+	result, err := h.adminService.ReplayPipelineTask(
+		req.FileMD5,
+		req.DocumentVersion,
+		tasks.Stage(req.Stage),
+		req.WindowID,
+		req.DLQMessageID,
+	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": err.Error(), "data": nil})
 		return

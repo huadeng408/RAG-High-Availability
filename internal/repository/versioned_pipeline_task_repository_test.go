@@ -129,3 +129,20 @@ func TestDeadLetterCanBeResetForExactReplayWithoutLosingAuditEnvelope(t *testing
 		t.Fatalf("dead-letter audit envelope was lost: %#v", replayed)
 	}
 }
+
+func TestGetDeadLetterByKeyReturnsOnlyExactDurableEnvelope(t *testing.T) {
+	repo := newSQLitePipelineTaskRepo(t)
+	payload := `{"file_md5":"file-1","document_version":"version-1","window_id":"window-2","stage":"embed","dlq_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`
+	messageID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if err := repo.MarkDeadLetterByKey("file-1", "version-1", "embed", "window-2", "failed", payload, messageID); err != nil {
+		t.Fatal(err)
+	}
+	gotPayload, gotID, err := repo.GetDeadLetterByKey("file-1", "version-1", "embed", "window-2")
+	if err != nil || gotPayload != payload || gotID != messageID {
+		t.Fatalf("envelope=%q id=%q err=%v", gotPayload, gotID, err)
+	}
+	gotPayload, gotID, err = repo.GetDeadLetterByKey("file-1", "version-1", "embed", "window-9")
+	if err != nil || gotPayload != "" || gotID != "" {
+		t.Fatalf("mismatched identity returned envelope=%q id=%q err=%v", gotPayload, gotID, err)
+	}
+}

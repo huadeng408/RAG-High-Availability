@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -532,6 +533,17 @@ class RuntimeE2ETest(unittest.TestCase):
         self.assertEqual(args.model_stub_control_url, "http://127.0.0.1:8010")
         self.assertEqual(args.kafka_container, "rha-e2e-kafka-1")
         self.assertEqual(args.kafka_bootstrap_server, "kafka:29092")
+        self.assertIsNone(args.admin_password)
+
+    def test_admin_credentials_require_cli_or_environment_password(self) -> None:
+        runtime = load_runtime_module()
+        original = os.environ.pop("RHA_E2E_ADMIN_PASSWORD", None)
+        try:
+            with self.assertRaisesRegex(RuntimeError, "admin password"):
+                runtime.resolve_admin_credentials(SimpleNamespace(admin_username="admin", admin_password=None))
+        finally:
+            if original is not None:
+                os.environ["RHA_E2E_ADMIN_PASSWORD"] = original
 
     def test_consume_dlq_envelope_selects_requested_message(self) -> None:
         runtime = load_runtime_module()

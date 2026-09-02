@@ -138,6 +138,14 @@ func topicByStage(stage tasks.Stage) string {
 
 // produceToTopic handles produce to topic.
 func produceToTopic(ctx context.Context, topic string, task tasks.FileProcessingTask) error {
+	taskBytes, err := json.Marshal(task)
+	if err != nil {
+		return err
+	}
+	return produceBytesToTopic(ctx, topic, taskBytes)
+}
+
+func produceBytesToTopic(ctx context.Context, topic string, taskBytes []byte) error {
 	if writers == nil {
 		return errors.New("kafka producer not initialized")
 	}
@@ -145,12 +153,9 @@ func produceToTopic(ctx context.Context, topic string, task tasks.FileProcessing
 	if !ok {
 		return fmt.Errorf("kafka writer for topic '%s' not found", topic)
 	}
-	taskBytes, err := json.Marshal(task)
-	if err != nil {
-		return err
-	}
 
 	maxAttempts := maxInt(producerCfg.MaxRetries, 3)
+	var err error
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		writeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -245,6 +250,25 @@ func ProduceTaskToDLQ(task tasks.FileProcessingTask) error {
 	return produceToTopic(context.Background(), topics.dlq, task)
 }
 
+// ProduceRawToDLQ durably hands off a malformed Kafka payload without attempting to decode it.
+func ProduceRawToDLQ(payload []byte) error {
+	return produceBytesToTopic(context.Background(), topics.dlq, payload)
+}
+
+func handleMalformedMessage(payload []byte, publish func([]byte) error, commit func() error) error {
+	if err := publish(payload); err != nil {
+		return err
+	}
+	return commit()
+}
+
+func handleSuccessfulMessage(markSuccess func() error, commit func() error) error {
+	if err := markSuccess(); err != nil {
+		return err
+	}
+	return commit()
+}
+
 // StartPipelineConsumers starts one consumer for each stage topic.
 func StartPipelineConsumers(cfg config.KafkaConfig, processor TaskProcessor, tracker repository.PipelineTaskRepository) {
 	cfg = normalizeKafkaConfig(cfg)
@@ -286,7 +310,14 @@ func consumeStage(cfg config.KafkaConfig, tracker repository.PipelineTaskReposit
 		var task tasks.FileProcessingTask
 		if err := json.Unmarshal(m.Value, &task); err != nil {
 			log.Errorf("无法解析 Kafka 消息, stage=%s offset=%d err=%v", stage, m.Offset, err)
-			_ = r.CommitMessages(context.Background(), m)
+			if handoffErr := handleMalformedMessage(
+				m.Value,
+				func(payload []byte) error { return ProduceRawToDLQ(payload) },
+				func() error { return r.CommitMessages(context.Background(), m) },
+			); handoffErr != nil {
+				log.Errorf("Malformed Kafka 消息交接失败, stage=%s offset=%d err=%v", stage, m.Offset, handoffErr)
+				time.Sleep(time.Second)
+			}
 			continue
 		}
 		if task.Stage == "" {
@@ -363,11 +394,15 @@ func consumeStage(cfg config.KafkaConfig, tracker repository.PipelineTaskReposit
 			continue
 		}
 
-		if err := tracker.MarkSuccessByKey(task.FileMD5, documentVersion, string(task.Stage), windowID); err != nil {
-			log.Errorf("标记任务成功失败, stage=%s file=%s err=%v", stage, task.FileMD5, err)
-		}
-		if err := r.CommitMessages(context.Background(), m); err != nil {
-			log.Errorf("提交 Kafka offset 失败, stage=%s offset=%d err=%v", stage, m.Offset, err)
+		if err := handleSuccessfulMessage(
+			func() error {
+				return tracker.MarkSuccessByKey(task.FileMD5, documentVersion, string(task.Stage), windowID)
+			},
+			func() error { return r.CommitMessages(context.Background(), m) },
+		); err != nil {
+			log.Errorf("标记任务成功或提交 Kafka offset 失败, stage=%s file=%s err=%v", stage, task.FileMD5, err)
+			time.Sleep(time.Second)
+			continue
 		}
 	}
 }
@@ -383,11 +418,11 @@ func consumerReaderConfig(_ config.KafkaConfig, topic, groupID string) kafka.Rea
 }
 
 func pipelineWindowID(task tasks.FileProcessingTask) string {
-	if value := strings.TrimSpace(task.WindowID); value != "" {
-		return value
-	}
 	if task.Stage == tasks.StageEmbed && task.TaskChunkID > 0 {
 		return fmt.Sprintf("window-%d", task.TaskChunkID)
+	}
+	if value := strings.TrimSpace(task.WindowID); value != "" {
+		return value
 	}
 	return "root"
 }

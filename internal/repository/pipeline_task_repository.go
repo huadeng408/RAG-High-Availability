@@ -22,6 +22,7 @@ type PipelineTaskRepository interface {
 	MarkRetryByKey(fileMD5, documentVersion, stage, windowID, lastError string) (int, error)
 	MarkFailedByKey(fileMD5, documentVersion, stage, windowID, lastError string) error
 	MarkDeadLetterByKey(fileMD5, documentVersion, stage, windowID, lastError, payload, messageID string) error
+	GetDeadLetterByKey(fileMD5, documentVersion, stage, windowID string) (payload, messageID string, err error)
 	ResetForReplayByKey(fileMD5, documentVersion, stage, windowID string) error
 	GetByKey(fileMD5, stage string, chunkID int) (*model.PipelineTask, error)
 	MarkProcessing(fileMD5, stage string, chunkID int) (*model.PipelineTask, error)
@@ -152,6 +153,22 @@ func (r *pipelineTaskRepository) MarkDeadLetterByKey(
 	task.DLQPayload = payload
 	task.DeadLetteredAt = &now
 	return r.db.Save(task).Error
+}
+
+// GetDeadLetterByKey returns the durable DLQ envelope for an exact task identity.
+func (r *pipelineTaskRepository) GetDeadLetterByKey(fileMD5, documentVersion, stage, windowID string) (string, string, error) {
+	var task model.PipelineTask
+	err := r.db.Where(
+		"file_md5 = ? AND document_version = ? AND stage = ? AND window_id = ? AND status = ? AND dlq_message_id <> ''",
+		fileMD5, documentVersion, stage, windowID, model.PipelineStatusFailed,
+	).First(&task).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return task.DLQPayload, task.DLQMessageID, nil
 }
 
 func (r *pipelineTaskRepository) ResetForReplayByKey(fileMD5, documentVersion, stage, windowID string) error {

@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import mimetypes
+import os
 import secrets
 import subprocess
 import struct
@@ -339,9 +340,19 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--kafka-container", default="rha-e2e-kafka-1")
     parser.add_argument("--kafka-bootstrap-server", default="kafka:29092")
     parser.add_argument("--kafka-dlq-topic", default="file-dlq")
-    parser.add_argument("--admin-username", default="admin")
-    parser.add_argument("--admin-password", default="admin123")
+    parser.add_argument("--admin-username", default=None)
+    parser.add_argument("--admin-password", default=None)
     return parser
+
+
+def resolve_admin_credentials(args: argparse.Namespace) -> tuple[str, str]:
+    username = str(getattr(args, "admin_username", None) or os.environ.get("RHA_E2E_ADMIN_USERNAME") or "admin").strip()
+    password = str(getattr(args, "admin_password", None) or os.environ.get("RHA_E2E_ADMIN_PASSWORD") or "")
+    if not username:
+        raise RuntimeError("admin username is required via --admin-username or RHA_E2E_ADMIN_USERNAME")
+    if not password:
+        raise RuntimeError("admin password is required via --admin-password or RHA_E2E_ADMIN_PASSWORD")
+    return username, password
 
 
 def _response_data(response: HTTPResponse, operation: str) -> Any:
@@ -592,12 +603,20 @@ def run_runtime(
             timeout_seconds=args.pipeline_timeout,
         )
         admin = RuntimeHTTPClient(args.base_url, trace_id, timeout_seconds=args.request_timeout)
+        admin_username, admin_password = resolve_admin_credentials(args)
+        dlq_payload = dlq_envelope.get("payload") if isinstance(dlq_envelope, dict) else {}
+        if not isinstance(dlq_payload, dict):
+            dlq_payload = dlq_envelope if isinstance(dlq_envelope, dict) else {}
+        document_version = str(failed_pipeline.get("documentVersion") or dlq_payload.get("document_version") or dlq_payload.get("documentVersion") or "")
+        window_id = str(dlq_payload.get("window_id") or dlq_payload.get("windowId") or "")
+        if not document_version or not window_id:
+            raise RuntimeError("DLQ envelope did not contain document version and window identity")
         admin_login = admin.request_json(
             "POST",
             "/api/v1/users/login",
             {
-                "username": str(getattr(args, "admin_username", "admin")),
-                "password": str(getattr(args, "admin_password", "admin123")),
+                "username": admin_username,
+                "password": admin_password,
             },
         )
         admin_token_data = _response_data(admin_login, "admin login")
@@ -607,7 +626,13 @@ def run_runtime(
         replay_response = admin.request_json(
             "POST",
             "/api/v1/admin/pipeline/replay",
-            {"fileMd5": recovery_upload["fileMd5"], "stage": "embed"},
+            {
+                "fileMd5": recovery_upload["fileMd5"],
+                "documentVersion": document_version,
+                "stage": "embed",
+                "windowId": window_id,
+                "dlqMessageId": dlq_id,
+            },
             token=admin_token,
         )
         replay_data = _response_data(replay_response, "pipeline replay")
@@ -643,6 +668,7 @@ def run_runtime(
             return int((response.body or {}).get("count", 0))
 
         recovery = {
+            "upload": recovery_upload,
             "stage": "embed",
             "dlqMessageId": dlq_id,
             "dlq": {
