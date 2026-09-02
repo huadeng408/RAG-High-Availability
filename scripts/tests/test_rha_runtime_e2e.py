@@ -554,6 +554,24 @@ class RuntimeE2ETest(unittest.TestCase):
             runtime.subprocess.run = original
         self.assertEqual(envelope["stage"], "embed")
 
+    def test_consume_dlq_envelope_requests_bounded_message_count(self) -> None:
+        runtime = load_runtime_module()
+        observed = {}
+        original = runtime.subprocess.run
+        try:
+            def fake_run(command, **kwargs):
+                observed["command"] = command
+                return SimpleNamespace(returncode=0, stdout=json.dumps({"dlq_id": "wanted"}) + "\n", stderr="")
+            runtime.subprocess.run = fake_run
+            runtime.consume_dlq_envelope(
+                container="kafka-container", bootstrap_server="kafka:29092", topic="file-dlq",
+                message_id="wanted", timeout_seconds=1,
+            )
+        finally:
+            runtime.subprocess.run = original
+        self.assertIn("--max-messages", observed["command"])
+        self.assertEqual(observed["command"][observed["command"].index("--max-messages") + 1], "1")
+
     def test_generated_pptx_is_parsed_as_slide_evidence(self) -> None:
         try:
             runtime = load_runtime_module()

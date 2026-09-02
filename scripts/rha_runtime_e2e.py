@@ -220,6 +220,7 @@ def consume_dlq_envelope(
         "--bootstrap-server", bootstrap_server,
         "--topic", topic, "--from-beginning",
         "--property", "print.value=true",
+        "--max-messages", "1",
         "--timeout-ms", str(max(1000, int(timeout_seconds * 1000))),
     ]
     completed = subprocess.run(command, check=False, capture_output=True, text=True)
