@@ -2,11 +2,11 @@
 package handler
 
 import (
-	"net/http"
 	"github.com/huadeng408/RAG-High-Availability/internal/service"
 	"github.com/huadeng408/RAG-High-Availability/pkg/log"
 	"github.com/huadeng408/RAG-High-Availability/pkg/tasks"
 	"github.com/huadeng408/RAG-High-Availability/pkg/token"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -238,9 +238,10 @@ func (h *AdminHandler) ReplayPipelineTask(c *gin.Context) {
 		return
 	}
 
-	if err := h.adminService.ReplayPipelineTask(req.FileMD5, tasks.Stage(req.Stage)); err != nil {
+	result, err := h.adminService.ReplayPipelineTask(req.FileMD5, tasks.Stage(req.Stage))
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": err.Error(), "data": nil})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": http.StatusOK, "message": "已提交重放任务", "data": nil})
+	c.JSON(http.StatusOK, gin.H{"code": http.StatusOK, "message": "已提交重放任务", "data": result})
 }

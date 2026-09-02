@@ -21,6 +21,8 @@ type PipelineTaskRepository interface {
 	MarkSuccessByKey(fileMD5, documentVersion, stage, windowID string) error
 	MarkRetryByKey(fileMD5, documentVersion, stage, windowID, lastError string) (int, error)
 	MarkFailedByKey(fileMD5, documentVersion, stage, windowID, lastError string) error
+	MarkDeadLetterByKey(fileMD5, documentVersion, stage, windowID, lastError, payload, messageID string) error
+	ResetForReplayByKey(fileMD5, documentVersion, stage, windowID string) error
 	GetByKey(fileMD5, stage string, chunkID int) (*model.PipelineTask, error)
 	MarkProcessing(fileMD5, stage string, chunkID int) (*model.PipelineTask, error)
 	MarkSuccess(fileMD5, stage string, chunkID int) error
@@ -130,6 +132,53 @@ func (r *pipelineTaskRepository) MarkFailedByKey(fileMD5, documentVersion, stage
 	task.Status = model.PipelineStatusFailed
 	task.LastError = lastError
 	return r.db.Save(task).Error
+}
+
+func (r *pipelineTaskRepository) MarkDeadLetterByKey(
+	fileMD5, documentVersion, stage, windowID, lastError, payload, messageID string,
+) error {
+	if strings.TrimSpace(payload) == "" || strings.TrimSpace(messageID) == "" {
+		return errors.New("dead-letter payload and message ID are required")
+	}
+	task, err := r.MarkProcessingByKey(fileMD5, documentVersion, stage, windowID)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	task.Status = model.PipelineStatusFailed
+	task.LastError = lastError
+	task.NextAttemptAt = nil
+	task.DLQMessageID = messageID
+	task.DLQPayload = payload
+	task.DeadLetteredAt = &now
+	return r.db.Save(task).Error
+}
+
+func (r *pipelineTaskRepository) ResetForReplayByKey(fileMD5, documentVersion, stage, windowID string) error {
+	now := time.Now()
+	result := r.db.Model(&model.PipelineTask{}).
+		Where(
+			"file_md5 = ? AND document_version = ? AND stage = ? AND window_id = ? AND status = ? AND dlq_message_id <> ''",
+			fileMD5,
+			documentVersion,
+			stage,
+			windowID,
+			model.PipelineStatusFailed,
+		).
+		Updates(map[string]any{
+			"status":           model.PipelineStatusPending,
+			"last_error":       "",
+			"next_attempt_at":  nil,
+			"replay_count":     gorm.Expr("replay_count + 1"),
+			"last_replayed_at": &now,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("dead-letter task not found or already replayed")
+	}
+	return nil
 }
 
 // GetByKey returns by key.

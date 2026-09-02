@@ -64,5 +64,12 @@ curl -fsS http://127.0.0.1:8080/healthz >/dev/null
 "$PYTHON_BIN" "$RUNNER_PATH" \
   --base-url http://127.0.0.1:8080 \
   --elasticsearch-url http://127.0.0.1:9200 \
-  --out "$REPORT_ARG"
+  --out "$REPORT_ARG" \
+  --exercise-replay \
+  --model-stub-control-url "${RHA_E2E_MODEL_STUB_CONTROL_URL:-http://127.0.0.1:8010}" \
+  --kafka-container "${RHA_E2E_KAFKA_CONTAINER:-rha-e2e-kafka-1}" \
+  --kafka-bootstrap-server "${RHA_E2E_KAFKA_BOOTSTRAP_SERVER:-kafka:29092}" \
+  --kafka-dlq-topic "${RHA_E2E_KAFKA_DLQ_TOPIC:-file-dlq}" \
+  --admin-username "${RHA_E2E_ADMIN_USERNAME:-admin}" \
+  --admin-password "${RHA_E2E_ADMIN_PASSWORD:-admin123}"
 "$PYTHON_BIN" "$VERIFY_PATH" --report "$REPORT_ARG"

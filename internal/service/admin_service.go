@@ -3,6 +3,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -52,7 +53,15 @@ type AdminService interface {
 	AssignOrgTagsToUser(userID uint, orgTags []string) error
 	ListUsers(page, size int) (*UserListResponse, error)
 	GetAllConversations(ctx context.Context, userID *uint, startTime, endTime *time.Time) ([]map[string]interface{}, error)
-	ReplayPipelineTask(fileMD5 string, stage tasks.Stage) error
+	ReplayPipelineTask(fileMD5 string, stage tasks.Stage) (*PipelineReplayResult, error)
+}
+
+// PipelineReplayResult identifies the durable dead-letter tasks accepted for replay.
+type PipelineReplayResult struct {
+	FileMD5       string      `json:"fileMd5"`
+	Stage         tasks.Stage `json:"stage"`
+	ReplayedTasks int         `json:"replayedTasks"`
+	MessageIDs    []string    `json:"messageIds"`
 }
 
 // adminService implements admin operations.
@@ -62,6 +71,7 @@ type adminService struct {
 	conversationRepo repository.ConversationRepository
 	pipelineTaskRepo repository.PipelineTaskRepository
 	uploadRepo       repository.UploadRepository
+	produceTask      func(tasks.FileProcessingTask) error
 }
 
 // NewAdminService creates an admin service.
@@ -78,6 +88,7 @@ func NewAdminService(
 		conversationRepo: conversationRepo,
 		pipelineTaskRepo: pipelineTaskRepo,
 		uploadRepo:       uploadRepo,
+		produceTask:      kafka.ProduceTask,
 	}
 }
 
@@ -336,33 +347,78 @@ func (s *adminService) getConversationsForUser(ctx context.Context, user *model.
 }
 
 // ReplayPipelineTask handles replay pipeline task.
-func (s *adminService) ReplayPipelineTask(fileMD5 string, stage tasks.Stage) error {
+func (s *adminService) ReplayPipelineTask(fileMD5 string, stage tasks.Stage) (*PipelineReplayResult, error) {
 	fileMD5 = strings.TrimSpace(fileMD5)
 	if fileMD5 == "" {
-		return errors.New("fileMd5 cannot be empty")
+		return nil, errors.New("fileMd5 cannot be empty")
 	}
 	if stage == "" {
 		stage = tasks.StageParse
 	}
 	if stage != tasks.StageParse && stage != tasks.StageChunk && stage != tasks.StageEmbed && stage != tasks.StageIndex {
-		return fmt.Errorf("unsupported stage: %s", stage)
+		return nil, fmt.Errorf("unsupported stage: %s", stage)
 	}
 
 	uploadRecord, err := s.uploadRepo.GetFileUploadRecordByMD5(fileMD5)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	failedTasks, err := s.pipelineTaskRepo.ListFailedByFile(fileMD5)
+	if err != nil {
+		return nil, err
+	}
+	result := &PipelineReplayResult{FileMD5: fileMD5, Stage: stage, MessageIDs: []string{}}
+	producer := s.produceTask
+	if producer == nil {
+		producer = kafka.ProduceTask
+	}
+	for _, failed := range failedTasks {
+		if failed.Stage != string(stage) || failed.DLQMessageID == "" || failed.DLQPayload == "" {
+			continue
+		}
+		var task tasks.FileProcessingTask
+		if err := json.Unmarshal([]byte(failed.DLQPayload), &task); err != nil {
+			return result, fmt.Errorf("decode DLQ payload %s: %w", failed.DLQMessageID, err)
+		}
+		task.FileMD5 = uploadRecord.FileMD5
+		task.FileName = uploadRecord.FileName
+		task.UserID = uploadRecord.UserID
+		task.OrgTag = uploadRecord.OrgTag
+		task.IsPublic = uploadRecord.IsPublic
+		task.DocumentVersion = failed.DocumentVersion
+		task.WindowID = failed.WindowID
+		task.Stage = stage
+		task.LastError = ""
+		task.Attempt = 0
+		task.DLQID = ""
 
-	task := tasks.FileProcessingTask{
-		FileMD5:   uploadRecord.FileMD5,
-		FileName:  uploadRecord.FileName,
-		UserID:    uploadRecord.UserID,
-		OrgTag:    uploadRecord.OrgTag,
-		IsPublic:  uploadRecord.IsPublic,
-		Stage:     stage,
-		ObjectURL: "",
+		if err := s.pipelineTaskRepo.ResetForReplayByKey(
+			fileMD5, failed.DocumentVersion, failed.Stage, failed.WindowID,
+		); err != nil {
+			return result, err
+		}
+		if err := producer(task); err != nil {
+			restoreErr := s.pipelineTaskRepo.MarkDeadLetterByKey(
+				fileMD5,
+				failed.DocumentVersion,
+				failed.Stage,
+				failed.WindowID,
+				"replay publish failed: "+err.Error(),
+				failed.DLQPayload,
+				failed.DLQMessageID,
+			)
+			if restoreErr != nil {
+				return result, fmt.Errorf("publish replay: %w; restore dead letter: %v", err, restoreErr)
+			}
+			return result, fmt.Errorf("publish replay: %w", err)
+		}
+		result.ReplayedTasks++
+		result.MessageIDs = append(result.MessageIDs, failed.DLQMessageID)
 	}
-	return kafka.ProduceTask(task)
+	if result.ReplayedTasks == 0 {
+		return nil, fmt.Errorf("no replayable %s dead-letter task found for file %s", stage, fileMD5)
+	}
+	return result, nil
 }
 
 // containsTag reports whether tag is present.

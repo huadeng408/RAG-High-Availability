@@ -114,6 +114,35 @@ def runtime_report() -> dict:
             "citations": [dict(image_citation)],
         },
     }
+    report["recovery"] = {
+        "stage": "embed",
+        "dlqMessageId": "d" * 64,
+        "dlq": {
+            "topic": "file-dlq",
+            "messageId": "d" * 64,
+            "payload": {"stage": "embed", "file_md5": "fedcba9876543210fedcba9876543210"},
+        },
+        "replay": {
+            "statusCode": 200,
+            "replayedTasks": 1,
+            "messageIds": ["d" * 64],
+        },
+        "pipeline": {
+            "status": "SEARCHABLE",
+            "documentVersion": "image-version",
+            "stages": [
+                {"stage": stage, "status": "SUCCESS", "attemptCount": 2, "replayCount": 1}
+                for stage in ("parse", "chunk", "embed", "index")
+            ],
+        },
+        "elasticsearch": {"knowledgeCount": 1, "evidenceCount": 1},
+    }
+    return report
+
+
+def recovery_report() -> dict:
+    report = runtime_report()
+    report["schemaVersion"] = 3
     return report
 
 
@@ -391,6 +420,46 @@ class VerifyRhaE2ETest(unittest.TestCase):
             path = Path(directory) / "report.json"
             path.write_text(json.dumps(report), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "websocket.answer"):
+                VERIFY_MODULE.verify(path)
+
+    def test_rejects_schema_v3_report_without_recovery_object(self) -> None:
+        report = recovery_report()
+        del report["recovery"]
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "recovery"):
+                VERIFY_MODULE.verify(path)
+
+    def test_rejects_recovery_when_dlq_id_does_not_match_envelope(self) -> None:
+        report = recovery_report()
+        report["recovery"]["dlq"]["messageId"] = "e" * 64
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "DLQ"):
+                VERIFY_MODULE.verify(path)
+
+    def test_rejects_recovery_when_replay_result_is_incorrect(self) -> None:
+        report = recovery_report()
+        report["recovery"]["replay"]["replayedTasks"] = 0
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "replay"):
+                VERIFY_MODULE.verify(path)
+
+    def test_rejects_recovery_when_elasticsearch_counts_are_duplicated(self) -> None:
+        report = recovery_report()
+        report["recovery"]["elasticsearch"]["evidenceCount"] = 2
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "duplicate"):
                 VERIFY_MODULE.verify(path)
 
 

@@ -42,7 +42,12 @@ class ImageOCRRequest(BaseModel):
     assetSha256: str
 
 
+class FailureControl(BaseModel):
+    embeddings: bool = False
+
+
 IMAGE_OCR_FIXTURE = json.loads(Path("/app/rha_image_fixture.json").read_text(encoding="utf-8"))
+FAILURES = {"embeddings": False}
 
 
 def _vector(text: str, dimensions: int) -> list[float]:
@@ -55,8 +60,16 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.put("/control/failures")
+def set_failures(payload: FailureControl) -> dict[str, bool]:
+    FAILURES["embeddings"] = payload.embeddings
+    return dict(FAILURES)
+
+
 @app.post("/embeddings")
 def embeddings(payload: EmbeddingRequest) -> dict[str, Any]:
+    if FAILURES["embeddings"]:
+        raise HTTPException(status_code=503, detail="E2E embedding failure enabled")
     texts = [payload.input] if isinstance(payload.input, str) else payload.input
     return {
         "object": "list",

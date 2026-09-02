@@ -52,18 +52,27 @@ CREATE TABLE chunk_info (
 CREATE TABLE pipeline_task (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     file_md5 VARCHAR(32) NOT NULL,
+    document_version VARCHAR(96) NOT NULL,
     stage VARCHAR(20) NOT NULL,
+    window_id VARCHAR(64) NOT NULL,
     chunk_id INT NOT NULL DEFAULT -1,
     status VARCHAR(20) NOT NULL,
     retry_count INT NOT NULL DEFAULT 0,
     last_error TEXT,
-    idempotency_key VARCHAR(96) NOT NULL,
+    next_attempt_at TIMESTAMP(3) NULL,
+    idempotency_key VARCHAR(160) NOT NULL,
+    dlq_message_id CHAR(64) NULL,
+    dlq_payload LONGTEXT NULL,
+    dead_lettered_at TIMESTAMP(3) NULL,
+    replay_count INT NOT NULL DEFAULT 0,
+    last_replayed_at TIMESTAMP(3) NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uk_pipeline_idempotency_key (idempotency_key),
-    UNIQUE KEY uk_pipeline_file_stage_chunk (file_md5, stage, chunk_id),
+    UNIQUE KEY idx_document_version_stage_window (document_version, stage, window_id),
     INDEX idx_pipeline_status (status),
-    INDEX idx_pipeline_file_md5 (file_md5)
+    INDEX idx_pipeline_file_md5 (file_md5),
+    INDEX idx_pipeline_dlq_message_id (dlq_message_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE document_vectors (

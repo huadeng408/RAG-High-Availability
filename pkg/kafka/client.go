@@ -316,28 +316,50 @@ func consumeStage(cfg config.KafkaConfig, tracker repository.PipelineTaskReposit
 		}
 
 		if err := processor.Process(context.Background(), task); err != nil {
-			retryCount, markErr := tracker.MarkRetryByKey(task.FileMD5, documentVersion, string(task.Stage), windowID, err.Error())
-			if markErr != nil {
-				log.Errorf("标记任务重试失败, stage=%s file=%s err=%v", stage, task.FileMD5, markErr)
+			var retryCount int
+			for {
+				retryCount, getErr = tracker.MarkRetryByKey(
+					task.FileMD5, documentVersion, string(task.Stage), windowID, err.Error(),
+				)
+				if getErr == nil {
+					break
+				}
+				log.Errorf("标记任务重试失败, stage=%s file=%s err=%v", stage, task.FileMD5, getErr)
+				time.Sleep(retryDelay(time.Duration(cfg.BaseBackoffMs)*time.Millisecond, 1))
+			}
+
+			backoff := retryDelay(time.Duration(cfg.BaseBackoffMs)*time.Millisecond, retryCount)
+			if retryCount <= cfg.MaxRetries {
+				time.Sleep(backoff)
+			}
+			for {
+				handoffErr := handoffFailedTask(
+					tracker,
+					task,
+					documentVersion,
+					windowID,
+					retryCount,
+					cfg.MaxRetries,
+					err,
+					func(retryTask tasks.FileProcessingTask) error {
+						return produceToTopic(context.Background(), topic, retryTask)
+					},
+					ProduceTaskToDLQ,
+				)
+				if handoffErr == nil {
+					break
+				}
+				log.Errorf("任务失败交接未完成, stage=%s file=%s backoff=%s err=%v", stage, task.FileMD5, backoff, handoffErr)
+				time.Sleep(backoff)
 			}
 			if retryCount <= cfg.MaxRetries {
-				backoff := retryDelay(time.Duration(cfg.BaseBackoffMs)*time.Millisecond, retryCount)
 				log.Warnf("任务处理失败, stage=%s file=%s retry=%d/%d backoff=%s err=%v", stage, task.FileMD5, retryCount, cfg.MaxRetries, backoff, err)
-				time.Sleep(backoff)
-				task.LastError = err.Error()
-				if produceErr := produceToTopic(context.Background(), topic, task); produceErr != nil {
-					log.Errorf("重投 Kafka 失败, stage=%s file=%s err=%v", stage, task.FileMD5, produceErr)
-				}
 			} else {
-				task.LastError = err.Error()
-				_ = tracker.MarkFailedByKey(task.FileMD5, documentVersion, string(task.Stage), windowID, err.Error())
-				if dlqErr := ProduceTaskToDLQ(task); dlqErr != nil {
-					log.Errorf("写入 DLQ 失败, stage=%s file=%s err=%v", stage, task.FileMD5, dlqErr)
-				} else {
-					log.Errorf("任务进入 DLQ, stage=%s file=%s", stage, task.FileMD5)
-				}
+				log.Errorf("任务进入 DLQ, stage=%s file=%s retry=%d", stage, task.FileMD5, retryCount)
 			}
-			_ = r.CommitMessages(context.Background(), m)
+			if commitErr := r.CommitMessages(context.Background(), m); commitErr != nil {
+				log.Errorf("提交失败任务 Kafka offset 失败, stage=%s offset=%d err=%v", stage, m.Offset, commitErr)
+			}
 			continue
 		}
 

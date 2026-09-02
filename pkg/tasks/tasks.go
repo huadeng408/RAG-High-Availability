@@ -27,4 +27,6 @@ type FileProcessingTask struct {
 	TotalChunks     int    `json:"total_chunks,omitempty"`
 	ParsedObject    string `json:"parsed_object,omitempty"`
 	LastError       string `json:"last_error,omitempty"`
+	Attempt         int    `json:"attempt,omitempty"`
+	DLQID           string `json:"dlq_id,omitempty"`
 }

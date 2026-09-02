@@ -84,3 +84,48 @@ func TestMarkRetryByKeyPersistsNextAttemptAndFinalError(t *testing.T) {
 		t.Fatalf("retry state not persisted: %#v", task)
 	}
 }
+
+func TestDeadLetterCanBeResetForExactReplayWithoutLosingAuditEnvelope(t *testing.T) {
+	repo := newSQLitePipelineTaskRepo(t)
+	payload := `{"file_md5":"file-1","document_version":"version-1","window_id":"window-2","stage":"embed"}`
+	messageID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+	if err := repo.MarkDeadLetterByKey(
+		"file-1",
+		"version-1",
+		"embed",
+		"window-2",
+		"embedding unavailable",
+		payload,
+		messageID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	deadLetter, err := repo.GetOrStart("file-1", "version-1", "embed", "window-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deadLetter.Status != model.PipelineStatusFailed || deadLetter.DeadLetteredAt == nil {
+		t.Fatalf("dead-letter state not persisted: %#v", deadLetter)
+	}
+	if deadLetter.DLQMessageID != messageID || deadLetter.DLQPayload != payload {
+		t.Fatalf("dead-letter envelope not persisted: %#v", deadLetter)
+	}
+
+	if err := repo.ResetForReplayByKey("file-1", "version-1", "embed", "window-2"); err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := repo.GetOrStart("file-1", "version-1", "embed", "window-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.Status != model.PipelineStatusPending || replayed.LastError != "" || replayed.NextAttemptAt != nil {
+		t.Fatalf("task was not reset for replay: %#v", replayed)
+	}
+	if replayed.ReplayCount != 1 || replayed.LastReplayedAt == nil {
+		t.Fatalf("replay audit metadata not persisted: %#v", replayed)
+	}
+	if replayed.DeadLetteredAt == nil || replayed.DLQMessageID != messageID || replayed.DLQPayload != payload {
+		t.Fatalf("dead-letter audit envelope was lost: %#v", replayed)
+	}
+}

@@ -144,6 +144,47 @@ def _verify_image_citation(citation: dict, *, field_name: str) -> None:
         raise ValueError(f"{field_name}.image.mimeType must identify a supported image")
 
 
+def _verify_recovery(report: dict) -> None:
+    recovery = report.get("recovery")
+    if not isinstance(recovery, dict):
+        raise ValueError("recovery object is required for schema v3")
+    stage = str(recovery.get("stage", "")).strip()
+    if stage != "embed":
+        raise ValueError("recovery.stage must identify the failed embed stage")
+    dlq_id = str(recovery.get("dlqMessageId", ""))
+    if not re.fullmatch(r"[0-9a-f]{64}", dlq_id):
+        raise ValueError("recovery.dlqMessageId must be a lowercase SHA-256 digest")
+    envelope = recovery.get("dlq") or {}
+    if envelope.get("topic") != "file-dlq" or envelope.get("messageId") != dlq_id:
+        raise ValueError("recovery DLQ envelope message ID must match recovery.dlqMessageId")
+    payload = envelope.get("payload") or {}
+    if payload.get("stage") != stage or not (payload.get("fileMd5") or payload.get("file_md5")):
+        raise ValueError("recovery DLQ payload must identify the failed stage and file")
+
+    replay = recovery.get("replay") or {}
+    replay_ids = [str(value) for value in replay.get("messageIds") or []]
+    if (
+        replay.get("statusCode") != 200
+        or int(replay.get("replayedTasks", 0)) != 1
+        or replay_ids != [dlq_id]
+    ):
+        raise ValueError("recovery replay result must acknowledge exactly the selected DLQ task")
+
+    pipeline = recovery.get("pipeline") or {}
+    if pipeline.get("status") != "SEARCHABLE":
+        raise ValueError("recovery replay pipeline must become SEARCHABLE")
+    if not pipeline.get("documentVersion"):
+        raise ValueError("recovery replay pipeline documentVersion is required")
+    stages = {item.get("stage"): item for item in pipeline.get("stages") or []}
+    embed = stages.get(stage) or {}
+    if embed.get("status") != "SUCCESS" or int(embed.get("replayCount", 0)) < 1:
+        raise ValueError("recovery replay stage must be successful with replay metadata")
+
+    counts = recovery.get("elasticsearch") or {}
+    if int(counts.get("knowledgeCount", 0)) != 1 or int(counts.get("evidenceCount", 0)) != 1:
+        raise ValueError("recovery Elasticsearch counts prove duplicate knowledge/evidence was created")
+
+
 def verify(report_path: Path) -> dict:
     report = json.loads(report_path.read_text(encoding="utf-8"))
     if report.get("reportKind") != "rha-runtime-e2e":
@@ -175,8 +216,9 @@ def verify(report_path: Path) -> dict:
     ):
         raise ValueError("pipeline.aliasReadback must contain a successful Elasticsearch alias readback")
 
-    if report.get("schemaVersion") != 2:
-        raise ValueError("schemaVersion must be 2 for the image runtime contract")
+    schema_version = report.get("schemaVersion")
+    if schema_version not in (2, 3):
+        raise ValueError("schemaVersion must be 2 or 3 for the image runtime contract")
     image_path = report.get("image")
     if not isinstance(image_path, dict):
         raise ValueError("image runtime path is required")
@@ -194,6 +236,8 @@ def verify(report_path: Path) -> dict:
     _verify_image_citation(retrieval_image_citation, field_name="image.retrieval.citations[0]")
     if image_citation != retrieval_image_citation:
         raise ValueError("image.websocket citation must equal its retrieval citation")
+    if schema_version == 3:
+        _verify_recovery(report)
     return report
 
 

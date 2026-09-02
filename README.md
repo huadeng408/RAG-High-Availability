@@ -226,7 +226,7 @@ python scripts/verify_langgraph_stack.py \
 bash scripts/run_rha_e2e.sh
 ```
 
-验收报告写入 `benchmarks/results/rha-e2e.json`，校验上传幂等、四阶段入库、PPT 与图片检索、Alias 读回、流式回答和来源引用。该报告用于功能验收，不代表生产模型效果或吞吐性能。
+验收报告写入 `benchmarks/results/rha-e2e.json`，默认校验上传幂等、四阶段入库、PPT 与图片检索、Alias 读回、流式回答、来源引用，以及一次真实 Kafka DLQ 重放恢复。恢复车道会让第三个 PNG 的 embedding 故障重试耗尽，读取 `file-dlq` 信封，由种子管理员调用重放接口，等待 `SEARCHABLE`，并检查 Elasticsearch 知识/证据计数没有重复。该报告用于功能验收，不代表生产模型效果或吞吐性能。
 
 
 ## 设计文档

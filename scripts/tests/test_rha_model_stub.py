@@ -31,6 +31,21 @@ def load_model_stub():
 
 
 class RhaModelStubTest(unittest.TestCase):
+    def test_embedding_failure_can_be_enabled_and_cleared_for_recovery_e2e(self) -> None:
+        model_stub = load_model_stub()
+        request = model_stub.EmbeddingRequest(input=["recovery evidence"], dimensions=8)
+
+        state = model_stub.set_failures(model_stub.FailureControl(embeddings=True))
+        self.assertTrue(state["embeddings"])
+        with self.assertRaises(model_stub.HTTPException) as raised:
+            model_stub.embeddings(request)
+        self.assertEqual(raised.exception.status_code, 503)
+
+        state = model_stub.set_failures(model_stub.FailureControl(embeddings=False))
+        self.assertFalse(state["embeddings"])
+        response = model_stub.embeddings(request)
+        self.assertEqual(len(response["data"]), 1)
+
     def test_chat_answers_the_image_fact_when_context_contains_ocr_result(self) -> None:
         model_stub = load_model_stub()
         request = model_stub.ChatRequest(

@@ -486,6 +486,74 @@ class RuntimeE2ETest(unittest.TestCase):
                 poll_interval=0,
             )
 
+    def test_wait_for_dead_letter_ignores_transient_failures_until_dlq_metadata_exists(self) -> None:
+        runtime = load_runtime_module()
+        message_id = "e" * 64
+        responses = iter(
+            [
+                {
+                    "status": "FAILED",
+                    "stages": [{"stage": "embed", "status": "FAILED", "retryCount": 1}],
+                },
+                {
+                    "status": "FAILED",
+                    "stages": [{"stage": "embed", "status": "FAILED", "retryCount": 2}],
+                },
+                {
+                    "status": "FAILED",
+                    "stages": [
+                        {
+                            "stage": "embed",
+                            "status": "FAILED",
+                            "retryCount": 3,
+                            "dlqMessageId": message_id,
+                            "deadLetteredAt": "2026-09-03T03:30:00+08:00",
+                        }
+                    ],
+                },
+            ]
+        )
+
+        status, polls = runtime.wait_for_dead_letter(
+            lambda: next(responses),
+            stage="embed",
+            max_retries=2,
+            timeout_seconds=1,
+            poll_interval=0,
+        )
+
+        self.assertEqual(polls, 3)
+        self.assertEqual(status["stages"][0]["dlqMessageId"], message_id)
+
+    def test_cli_exposes_recovery_controls(self) -> None:
+        runtime = load_runtime_module()
+        args = runtime.build_argument_parser().parse_args(["--out", "report.json", "--exercise-replay"])
+        self.assertTrue(args.exercise_replay)
+        self.assertEqual(args.model_stub_control_url, "http://127.0.0.1:8010")
+        self.assertEqual(args.kafka_container, "rha-e2e-kafka-1")
+        self.assertEqual(args.kafka_bootstrap_server, "kafka:29092")
+
+    def test_consume_dlq_envelope_selects_requested_message(self) -> None:
+        runtime = load_runtime_module()
+        self.assertTrue(hasattr(runtime, "consume_dlq_envelope"), "consume_dlq_envelope is required")
+        original = runtime.subprocess.run
+        try:
+            runtime.subprocess.run = lambda *args, **kwargs: SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"dlq_id": "other"}) + "\n" + json.dumps({"dlq_id": "wanted", "stage": "embed"}) + "\n",
+                stderr="",
+            )
+            envelope = runtime.consume_dlq_envelope(
+                container="kafka-container",
+                bootstrap_server="kafka:29092",
+                topic="file-dlq",
+                message_id="wanted",
+                timeout_seconds=1,
+            )
+        finally:
+            runtime.subprocess.run = original
+        self.assertEqual(envelope["stage"], "embed")
+
     def test_generated_pptx_is_parsed_as_slide_evidence(self) -> None:
         try:
             runtime = load_runtime_module()

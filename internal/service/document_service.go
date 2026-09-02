@@ -26,13 +26,17 @@ var pipelineStages = []string{"parse", "chunk", "embed", "index"}
 
 // PipelineStageStatus is the aggregated status of one logical pipeline stage.
 type PipelineStageStatus struct {
-	Stage         string     `json:"stage"`
-	Status        string     `json:"status"`
-	AttemptCount  int        `json:"attemptCount"`
-	RetryCount    int        `json:"retryCount"`
-	LastError     string     `json:"lastError,omitempty"`
-	NextAttemptAt *time.Time `json:"nextAttemptAt,omitempty"`
-	UpdatedAt     time.Time  `json:"updatedAt"`
+	Stage          string     `json:"stage"`
+	Status         string     `json:"status"`
+	AttemptCount   int        `json:"attemptCount"`
+	RetryCount     int        `json:"retryCount"`
+	LastError      string     `json:"lastError,omitempty"`
+	NextAttemptAt  *time.Time `json:"nextAttemptAt,omitempty"`
+	DLQMessageID   string     `json:"dlqMessageId,omitempty"`
+	DeadLetteredAt *time.Time `json:"deadLetteredAt,omitempty"`
+	ReplayCount    int        `json:"replayCount"`
+	LastReplayedAt *time.Time `json:"lastReplayedAt,omitempty"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
 }
 
 // PipelineStatus describes the version currently tracked by the ingestion pipeline.
@@ -222,17 +226,27 @@ func aggregatePipelineStage(stage string, tasks []model.PipelineTask) PipelineSt
 	}
 	result.AttemptCount = len(tasks)
 	latest := tasks[0]
+	latestDeadLetter := tasks[0]
 	for _, task := range tasks {
 		if task.RetryCount > result.RetryCount {
 			result.RetryCount = task.RetryCount
 		}
+		result.ReplayCount += task.ReplayCount
 		if task.UpdatedAt.After(latest.UpdatedAt) {
 			latest = task
+		}
+		if task.DeadLetteredAt != nil && (latestDeadLetter.DeadLetteredAt == nil || task.DeadLetteredAt.After(*latestDeadLetter.DeadLetteredAt)) {
+			latestDeadLetter = task
 		}
 	}
 	result.LastError = latest.LastError
 	result.NextAttemptAt = latest.NextAttemptAt
 	result.UpdatedAt = latest.UpdatedAt
+	if latestDeadLetter.DeadLetteredAt != nil {
+		result.DLQMessageID = latestDeadLetter.DLQMessageID
+		result.DeadLetteredAt = latestDeadLetter.DeadLetteredAt
+		result.LastReplayedAt = latestDeadLetter.LastReplayedAt
+	}
 
 	anyProcessing := false
 	anyFailed := false

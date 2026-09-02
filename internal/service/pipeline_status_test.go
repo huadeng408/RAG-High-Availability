@@ -56,8 +56,15 @@ func TestAggregatePipelineStatusLinksUploadParseToContentVersion(t *testing.T) {
 
 func TestAggregatePipelineStatusPreservesFailureAndRetryMetadata(t *testing.T) {
 	next := time.Now().Add(time.Minute)
+	deadLetteredAt := time.Now().Add(-time.Minute)
+	lastReplayedAt := time.Now().Add(-30 * time.Second)
 	tasks := []model.PipelineTask{
-		{FileMD5: "file-2", DocumentVersion: "version-2", Stage: "parse", WindowID: "root", Status: model.PipelineStatusFailed, RetryCount: 2, LastError: "mineru unavailable", NextAttemptAt: &next},
+		{
+			FileMD5: "file-2", DocumentVersion: "version-2", Stage: "parse", WindowID: "root",
+			Status: model.PipelineStatusFailed, RetryCount: 2, LastError: "mineru unavailable", NextAttemptAt: &next,
+			DLQMessageID: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+			DLQPayload:   "must-not-leak", DeadLetteredAt: &deadLetteredAt, ReplayCount: 1, LastReplayedAt: &lastReplayedAt,
+		},
 	}
 
 	status := AggregatePipelineStatus("file-2", tasks)
@@ -69,6 +76,10 @@ func TestAggregatePipelineStatusPreservesFailureAndRetryMetadata(t *testing.T) {
 	}
 	if status.Stages[0].NextAttemptAt == nil {
 		t.Fatal("next attempt timestamp was dropped")
+	}
+	stage := status.Stages[0]
+	if stage.DLQMessageID == "" || stage.DeadLetteredAt == nil || stage.ReplayCount != 1 || stage.LastReplayedAt == nil {
+		t.Fatalf("dead-letter replay metadata not preserved: %#v", stage)
 	}
 }
 

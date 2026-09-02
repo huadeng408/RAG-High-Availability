@@ -23,6 +23,11 @@ type PipelineTask struct {
 	LastError       string     `gorm:"type:text" json:"lastError"`
 	NextAttemptAt   *time.Time `json:"nextAttemptAt,omitempty"`
 	IdempotencyKey  string     `gorm:"type:varchar(160);not null;uniqueIndex" json:"idempotencyKey"`
+	DLQMessageID    string     `gorm:"column:dlq_message_id;type:char(64);index" json:"dlqMessageId,omitempty"`
+	DLQPayload      string     `gorm:"column:dlq_payload;type:longtext" json:"-"`
+	DeadLetteredAt  *time.Time `gorm:"column:dead_lettered_at" json:"deadLetteredAt,omitempty"`
+	ReplayCount     int        `gorm:"column:replay_count;not null;default:0" json:"replayCount"`
+	LastReplayedAt  *time.Time `gorm:"column:last_replayed_at" json:"lastReplayedAt,omitempty"`
 	UpdatedAt       time.Time  `gorm:"autoUpdateTime" json:"updatedAt"`
 	CreatedAt       time.Time  `gorm:"autoCreateTime" json:"createdAt"`
 }

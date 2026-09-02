@@ -9,6 +9,7 @@ import io
 import json
 import mimetypes
 import secrets
+import subprocess
 import struct
 import time
 import zipfile
@@ -156,6 +157,86 @@ def wait_for_searchable(
         time.sleep(max(0.0, poll_interval))
 
 
+def wait_for_dead_letter(
+    fetch_status: Callable[[], dict[str, Any]],
+    *,
+    stage: str,
+    max_retries: int,
+    timeout_seconds: float,
+    poll_interval: float,
+) -> tuple[dict[str, Any], int]:
+    deadline = time.monotonic() + timeout_seconds
+    polls = 0
+    last_status: dict[str, Any] = {}
+    while True:
+        last_status = fetch_status()
+        polls += 1
+        stage_status = next(
+            (item for item in last_status.get("stages") or [] if item.get("stage") == stage),
+            {},
+        )
+        message_id = str(stage_status.get("dlqMessageId", ""))
+        if (
+            stage_status.get("status") == "FAILED"
+            and int(stage_status.get("retryCount", 0)) > max_retries
+            and len(message_id) == 64
+            and bool(stage_status.get("deadLetteredAt"))
+        ):
+            return last_status, polls
+        if last_status.get("status") == "SEARCHABLE":
+            raise RuntimeError(f"pipeline became SEARCHABLE before {stage} entered the DLQ")
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"pipeline did not enter DLQ for stage {stage}; last status={last_status.get('status') or 'UNKNOWN'}"
+            )
+        time.sleep(max(0.0, poll_interval))
+
+
+def set_model_embedding_failure(control_url: str, enabled: bool, *, timeout_seconds: float) -> dict[str, Any]:
+    payload = json.dumps({"embeddings": enabled}).encode("utf-8")
+    request = Request(
+        control_url.rstrip("/") + "/control/failures",
+        data=payload,
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        method="PUT",
+    )
+    with urlopen(request, timeout=timeout_seconds) as response:
+        body = json.loads(response.read() or b"{}")
+    if not isinstance(body, dict) or body.get("embeddings") is not enabled:
+        raise RuntimeError("model stub did not confirm embedding failure state")
+    return body
+
+
+def consume_dlq_envelope(
+    *,
+    container: str,
+    bootstrap_server: str,
+    topic: str,
+    message_id: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    command = [
+        "docker", "exec", container, "kafka-console-consumer",
+        "--bootstrap-server", bootstrap_server,
+        "--topic", topic, "--from-beginning",
+        "--property", "print.value=true",
+        "--timeout-ms", str(max(1000, int(timeout_seconds * 1000))),
+    ]
+    completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    if completed.returncode not in (0, 1):
+        raise RuntimeError(f"Kafka DLQ consumer failed: {completed.stderr.strip()}")
+    for line in completed.stdout.splitlines():
+        try:
+            envelope = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        candidate = str(envelope.get("dlq_id") or envelope.get("dlqMessageId") or envelope.get("message_id") or "")
+        if candidate == message_id:
+            return envelope
+    raise RuntimeError(f"Kafka topic {topic} did not contain DLQ message {message_id}")
+
+
+
 def collect_websocket_answer(socket: Any, query: str, *, timeout_seconds: float) -> tuple[str, dict[str, Any], list[dict[str, Any]]]:
     socket.settimeout(timeout_seconds)
     socket.send(query)
@@ -210,7 +291,7 @@ def build_minimal_pptx(text: str) -> bytes:
     return buffer.getvalue()
 
 
-def build_minimal_png(width: int, height: int) -> bytes:
+def build_minimal_png(width: int, height: int, marker: str = "") -> bytes:
     """Build a valid RGB PNG using only the standard library."""
     if width <= 0 or height <= 0:
         raise ValueError("PNG dimensions must be positive")
@@ -225,11 +306,16 @@ def build_minimal_png(width: int, height: int) -> bytes:
 
     row = b"\x00" + bytes((240, 240, 240)) * width
     header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    chunks = [
+        png_chunk(b"IHDR", header),
+        png_chunk(b"IDAT", zlib.compress(row * height, level=9)),
+    ]
+    if marker:
+        chunks.append(png_chunk(b"tEXt", b"rha-marker=" + marker.encode("utf-8")))
+    chunks.append(png_chunk(b"IEND", b""))
     return (
         b"\x89PNG\r\n\x1a\n"
-        + png_chunk(b"IHDR", header)
-        + png_chunk(b"IDAT", zlib.compress(row * height, level=9))
-        + png_chunk(b"IEND", b"")
+        + b"".join(chunks)
     )
 
 
@@ -242,6 +328,13 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--poll-interval", type=float, default=1.0)
     parser.add_argument("--request-timeout", type=float, default=30.0)
     parser.add_argument("--websocket-timeout", type=float, default=120.0)
+    parser.add_argument("--exercise-replay", action="store_true")
+    parser.add_argument("--model-stub-control-url", default="http://127.0.0.1:8010")
+    parser.add_argument("--kafka-container", default="rha-e2e-kafka-1")
+    parser.add_argument("--kafka-bootstrap-server", default="kafka:29092")
+    parser.add_argument("--kafka-dlq-topic", default="file-dlq")
+    parser.add_argument("--admin-username", default="admin")
+    parser.add_argument("--admin-password", default="admin123")
     return parser
 
 
@@ -304,7 +397,13 @@ def run_runtime(
         raise RuntimeError("login response did not contain an access token")
     token = str(login_data["token"])
 
-    def upload_and_wait(file_name: str, contents: bytes, media_type: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    def upload_and_wait(
+        file_name: str,
+        contents: bytes,
+        media_type: str,
+        *,
+        wait_mode: str = "searchable",
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         file_md5 = hashlib.md5(contents).hexdigest()
         chunks = split_chunks(contents, 5 * 1024 * 1024)
         chunk_requests: list[dict[str, int]] = []
@@ -351,11 +450,20 @@ def run_runtime(
                 raise RuntimeError("pipeline status response data must be an object")
             return data
 
-        pipeline_status, poll_count = wait_for_searchable(
-            fetch_pipeline_status,
-            timeout_seconds=args.pipeline_timeout,
-            poll_interval=args.poll_interval,
-        )
+        if wait_mode == "dead_letter":
+            pipeline_status, poll_count = wait_for_dead_letter(
+                fetch_pipeline_status,
+                stage="embed",
+                max_retries=2,
+                timeout_seconds=args.pipeline_timeout,
+                poll_interval=args.poll_interval,
+            )
+        else:
+            pipeline_status, poll_count = wait_for_searchable(
+                fetch_pipeline_status,
+                timeout_seconds=args.pipeline_timeout,
+                poll_interval=args.poll_interval,
+            )
         return (
             {
                 "fileMd5": file_md5,
@@ -448,9 +556,117 @@ def run_runtime(
     retrieval, websocket = retrieve_and_chat(query)
     image_retrieval, image_websocket = retrieve_and_chat(image_query)
 
+    recovery: dict[str, Any] | None = None
+    if bool(getattr(args, "exercise_replay", False)):
+        control_url = str(getattr(args, "model_stub_control_url", "http://127.0.0.1:8010"))
+        set_model_embedding_failure(control_url, True, timeout_seconds=args.request_timeout)
+        recovery_file = f"rha-recovery-{run_suffix}.png"
+        recovery_contents = build_minimal_png(320, 120, marker=run_suffix)
+        try:
+            recovery_upload, failed_pipeline = upload_and_wait(
+                recovery_file,
+                recovery_contents,
+                "image/png",
+                wait_mode="dead_letter",
+            )
+        finally:
+            set_model_embedding_failure(control_url, False, timeout_seconds=args.request_timeout)
+        failed_stage = next(
+            (item for item in failed_pipeline.get("stages") or [] if item.get("stage") == "embed"),
+            {},
+        )
+        dlq_id = str(failed_stage.get("dlqMessageId", ""))
+        if not dlq_id:
+            raise RuntimeError("failed embed stage did not expose dlqMessageId")
+        dlq_envelope = consume_dlq_envelope(
+            container=str(getattr(args, "kafka_container", "rha-e2e-kafka-1")),
+            bootstrap_server=str(getattr(args, "kafka_bootstrap_server", "kafka:29092")),
+            topic=str(getattr(args, "kafka_dlq_topic", "file-dlq")),
+            message_id=dlq_id,
+            timeout_seconds=args.pipeline_timeout,
+        )
+        admin = RuntimeHTTPClient(args.base_url, trace_id, timeout_seconds=args.request_timeout)
+        admin_login = admin.request_json(
+            "POST",
+            "/api/v1/users/login",
+            {
+                "username": str(getattr(args, "admin_username", "admin")),
+                "password": str(getattr(args, "admin_password", "admin123")),
+            },
+        )
+        admin_token_data = _response_data(admin_login, "admin login")
+        admin_token = str((admin_token_data or {}).get("token", ""))
+        if not admin_token:
+            raise RuntimeError("seeded administrator login did not return a token")
+        replay_response = admin.request_json(
+            "POST",
+            "/api/v1/admin/pipeline/replay",
+            {"fileMd5": recovery_upload["fileMd5"], "stage": "embed"},
+            token=admin_token,
+        )
+        replay_data = _response_data(replay_response, "pipeline replay")
+        if not isinstance(replay_data, dict):
+            raise RuntimeError("pipeline replay response data must be an object")
+        recovery_client = RuntimeHTTPClient(args.base_url, trace_id, timeout_seconds=args.request_timeout)
+
+        def fetch_recovery_status() -> dict[str, Any]:
+            response = recovery_client.request_json(
+                "GET",
+                "/api/v1/documents/pipeline-status?" + urlencode({"fileMd5": recovery_upload["fileMd5"]}),
+                token=token,
+            )
+            data = _response_data(response, "recovery pipeline status")
+            if not isinstance(data, dict):
+                raise RuntimeError("recovery pipeline status response data must be an object")
+            return data
+
+        recovered_pipeline, recovery_poll_count = wait_for_searchable(
+            fetch_recovery_status,
+            timeout_seconds=args.pipeline_timeout,
+            poll_interval=args.poll_interval,
+        )
+        recovery_retrieval, recovery_websocket = retrieve_and_chat(image_query)
+        recovery_alias = "rha-knowledge-active"
+
+        def count_documents(alias: str, file_md5: str) -> int:
+            response = elasticsearch.request_json(
+                "POST",
+                "/" + quote(alias, safe="") + "/_count",
+                {"query": {"term": {"file_md5": file_md5}}},
+            )
+            return int((response.body or {}).get("count", 0))
+
+        recovery = {
+            "stage": "embed",
+            "dlqMessageId": dlq_id,
+            "dlq": {
+                "topic": str(getattr(args, "kafka_dlq_topic", "file-dlq")),
+                "messageId": dlq_id,
+                "payload": dlq_envelope,
+            },
+            "replay": {
+                "statusCode": replay_response.status_code,
+                "replayedTasks": int(replay_data.get("replayedTasks", 0)),
+                "messageIds": replay_data.get("messageIds") or [],
+            },
+            "pipeline": {
+                "source": "GET /api/v1/documents/pipeline-status",
+                "status": recovered_pipeline.get("status"),
+                "documentVersion": recovered_pipeline.get("documentVersion"),
+                "pollCount": recovery_poll_count,
+                "stages": recovered_pipeline.get("stages") or [],
+            },
+            "retrieval": recovery_retrieval,
+            "websocket": recovery_websocket,
+            "elasticsearch": {
+                "knowledgeCount": count_documents(recovery_alias, recovery_upload["fileMd5"]),
+                "evidenceCount": count_documents("rha-evidence-active", recovery_upload["fileMd5"]),
+            },
+        }
+
     report = {
         "reportKind": "rha-runtime-e2e",
-        "schemaVersion": 2,
+        "schemaVersion": 3 if recovery is not None else 2,
         "traceId": trace_id,
         "auth": {
             "registerStatusCode": register.status_code,
@@ -476,6 +692,8 @@ def run_runtime(
             "websocket": image_websocket,
         },
     }
+    if recovery is not None:
+        report["recovery"] = recovery
     output_path = Path(args.out)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
