@@ -167,7 +167,8 @@ func AggregatePipelineStatus(fileMD5 string, tasks []model.PipelineTask) Pipelin
 	status.DocumentVersion = version
 	byStage := make(map[string][]model.PipelineTask, len(pipelineStages))
 	for _, task := range tasks {
-		if version == "" || task.DocumentVersion == version {
+		isUploadParse := task.Stage == "parse" && task.DocumentVersion == "upload:"+fileMD5
+		if version == "" || task.DocumentVersion == version || isUploadParse {
 			byStage[task.Stage] = append(byStage[task.Stage], task)
 		}
 	}

@@ -32,6 +32,28 @@ func TestAggregatePipelineStatusRequiresEveryStageForSearchable(t *testing.T) {
 	}
 }
 
+func TestAggregatePipelineStatusLinksUploadParseToContentVersion(t *testing.T) {
+	parsedAt := time.Now()
+	versionedAt := parsedAt.Add(time.Second)
+	tasks := []model.PipelineTask{
+		{FileMD5: "file-1", DocumentVersion: "upload:file-1", Stage: "parse", WindowID: "root", Status: model.PipelineStatusSuccess, CreatedAt: parsedAt},
+		{FileMD5: "file-1", DocumentVersion: "version-sha", Stage: "chunk", WindowID: "root", Status: model.PipelineStatusSuccess, CreatedAt: versionedAt},
+		{FileMD5: "file-1", DocumentVersion: "version-sha", Stage: "embed", WindowID: "window-1", Status: model.PipelineStatusSuccess, CreatedAt: versionedAt},
+		{FileMD5: "file-1", DocumentVersion: "version-sha", Stage: "index", WindowID: "root", Status: model.PipelineStatusSuccess, CreatedAt: versionedAt},
+	}
+
+	status := AggregatePipelineStatus("file-1", tasks)
+	if status.Status != PipelineStatusSearchable {
+		t.Fatalf("overall status = %q, want %q", status.Status, PipelineStatusSearchable)
+	}
+	if status.DocumentVersion != "version-sha" {
+		t.Fatalf("document version = %q, want version-sha", status.DocumentVersion)
+	}
+	if status.Stages[0].Status != model.PipelineStatusSuccess {
+		t.Fatalf("parse status = %q, want SUCCESS", status.Stages[0].Status)
+	}
+}
+
 func TestAggregatePipelineStatusPreservesFailureAndRetryMetadata(t *testing.T) {
 	next := time.Now().Add(time.Minute)
 	tasks := []model.PipelineTask{
