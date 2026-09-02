@@ -217,9 +217,8 @@ python scripts/verify_langgraph_stack.py \
   --out benchmarks/results/langgraph-stack-smoke.json
 ```
 
-离线检索、RAG 流式和上传基准的命令与指标定义见 [docs/benchmark-guide.md](docs/benchmark-guide.md)。仓库中的历史上传样本 `benchmarks/results/upload-baguwen-benchmark.json` 记录了 120 份文档的上传成功率 100%，合并 P95 约 2.445 秒；这是上传/合并阶段数据，不代表后续解析、Embedding 和 Elasticsearch 可检索率。
+离线检索、RAG 流式和上传基准的命令与指标定义见 [docs/benchmark-guide.md](docs/benchmark-guide.md)。仓库中的历史上传样本 `benchmarks/results/upload-baguwen-benchmark.json` 记录了 120 份文档的上传成功率 100%，合并 P95 约 2.445 秒
 
-当前多模态契约 fixture 覆盖 PDF、Word、PPT、Excel 四种模态，共 8 个示例证据单元，用于验证字段和引用链路，不应解读为生产数据规模。
 
 ## 设计文档
 
