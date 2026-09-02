@@ -297,6 +297,9 @@ func (s *uploadService) GetSupportedFileTypes() (map[string]interface{}, error) 
 		".xlsx": "EXCEL",
 		".ppt":  "PPT",
 		".pptx": "PPT",
+		".png":  "IMAGE",
+		".jpg":  "IMAGE",
+		".jpeg": "IMAGE",
 		".txt":  "TEXT",
 		".md":   "MARKDOWN",
 	}
@@ -481,6 +484,9 @@ func getFileType(fileName string) string {
 		".xlsx": "EXCEL",
 		".ppt":  "PPT",
 		".pptx": "PPT",
+		".png":  "IMAGE",
+		".jpg":  "IMAGE",
+		".jpeg": "IMAGE",
 		".txt":  "TEXT",
 		".md":   "MARKDOWN",
 	}

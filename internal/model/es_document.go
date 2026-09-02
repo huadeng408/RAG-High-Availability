@@ -17,20 +17,21 @@ type SearchResponseDTO struct {
 // EsDocument 代表存储在 Elasticsearch 中的文档结构。
 // EsDocument 定义了存储在 Elasticsearch 中的文档结构。
 type EsDocument struct {
-	VectorID        string       `json:"vector_id"` // 唯一标识，例如 fileMd5 + chunkId
-	FileMD5         string       `json:"file_md5"`
-	DocumentVersion string       `json:"document_version,omitempty"`
-	ChunkID         int          `json:"chunk_id"`
-	TextContent     string       `json:"text_content"`
-	Vector          []float32    `json:"vector"` // 文本内容的向量表示
-	ModelVersion    string       `json:"model_version"`
-	UserID          uint         `json:"user_id"`
-	OrgTag          string       `json:"org_tag"`
-	IsPublic        bool         `json:"is_public"`
-	Modality        string       `json:"modality,omitempty"`
-	Page            int          `json:"page,omitempty"`
-	Slide           int          `json:"slide,omitempty"`
-	Sheet           string       `json:"sheet,omitempty"`
-	EvidenceIDs     []string     `json:"evidence_ids,omitempty"`
-	BBox            *BoundingBox `json:"bbox,omitempty"`
+	VectorID        string         `json:"vector_id"` // 唯一标识，例如 fileMd5 + chunkId
+	FileMD5         string         `json:"file_md5"`
+	DocumentVersion string         `json:"document_version,omitempty"`
+	ChunkID         int            `json:"chunk_id"`
+	TextContent     string         `json:"text_content"`
+	Vector          []float32      `json:"vector"` // 文本内容的向量表示
+	ModelVersion    string         `json:"model_version"`
+	UserID          uint           `json:"user_id"`
+	OrgTag          string         `json:"org_tag"`
+	IsPublic        bool           `json:"is_public"`
+	Modality        string         `json:"modality,omitempty"`
+	Page            int            `json:"page,omitempty"`
+	Slide           int            `json:"slide,omitempty"`
+	Sheet           string         `json:"sheet,omitempty"`
+	EvidenceIDs     []string       `json:"evidence_ids,omitempty"`
+	BBox            *BoundingBox   `json:"bbox,omitempty"`
+	Image           *ImageMetadata `json:"image,omitempty"`
 }

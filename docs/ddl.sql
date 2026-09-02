@@ -84,6 +84,7 @@ CREATE TABLE document_vectors (
     row_end INT NULL,
     evidence_ids JSON NULL,
     bbox JSON NULL,
+    image_metadata JSON NULL,
     UNIQUE KEY uk_document_vectors_version_chunk (document_version, chunk_id),
     INDEX idx_document_vectors_version (document_version)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -111,6 +112,7 @@ CREATE TABLE evidence_units (
     row_start INT NULL,
     row_end INT NULL,
     bbox JSON NULL,
+    image_metadata JSON NULL,
     text_content TEXT NOT NULL,
     parser_name VARCHAR(128) NOT NULL,
     parser_version VARCHAR(64) NOT NULL,

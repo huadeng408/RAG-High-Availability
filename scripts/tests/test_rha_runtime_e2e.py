@@ -33,12 +33,32 @@ def load_runtime_module():
 class RuntimeE2ETest(unittest.TestCase):
     def test_run_runtime_exercises_api_and_writes_secret_free_report(self) -> None:
         runtime = load_runtime_module()
-        observed: dict[str, object] = {"paths": [], "chunkFields": []}
+        observed: dict[str, object] = {
+            "paths": [],
+            "chunkFields": [],
+            "chunkMediaTypes": [],
+            "merges": [],
+            "searchQueries": [],
+            "websocketQueries": [],
+            "websocketClosed": 0,
+        }
         citation = {
             "evidenceId": "ppt-slide-1",
             "documentVersion": "content-version",
             "modality": "ppt",
             "slide": 1,
+        }
+        image_citation = {
+            "evidenceId": "image-ocr-1",
+            "documentVersion": "image-version",
+            "modality": "image",
+            "bbox": {"x0": 24, "y0": 30, "x1": 280, "y1": 78},
+            "image": {
+                "assetSha256": "a" * 64,
+                "mimeType": "image/png",
+                "width": 320,
+                "height": 120,
+            },
         }
 
         class Handler(BaseHTTPRequestHandler):
@@ -72,6 +92,7 @@ class RuntimeE2ETest(unittest.TestCase):
                         ).encode()
                         + body
                     )
+                    file_part = next(part for part in message.iter_parts() if part.get_filename())
                     fields = {
                         part.get_param("name", header="content-disposition"): (
                             part.get_payload(decode=True)
@@ -81,11 +102,12 @@ class RuntimeE2ETest(unittest.TestCase):
                         for part in message.iter_parts()
                     }
                     observed["chunkFields"].append(fields)
+                    observed["chunkMediaTypes"].append(file_part.get_content_type())
                     self._write_json({"code": 200, "data": {"uploaded": [0], "totalChunks": 1}})
                     return
                 if self.path.endswith("/upload/merge"):
-                    observed["merge"] = json.loads(body)
-                    self._write_json({"code": 200, "data": {"object_url": "uploads/runtime.pptx"}})
+                    observed["merges"].append(json.loads(body))
+                    self._write_json({"code": 200, "data": {"object_url": "uploads/runtime"}})
                     return
                 self.send_error(404)
 
@@ -94,15 +116,20 @@ class RuntimeE2ETest(unittest.TestCase):
                 parsed = urlparse(self.path)
                 query = parse_qs(parsed.query)
                 chunks = observed["chunkFields"]
-                file_md5 = chunks[0]["fileMd5"] if chunks else "missing"
                 if parsed.path.endswith("/documents/pipeline-status"):
-                    self.assert_request(query.get("fileMd5") == [file_md5])
+                    file_md5 = (query.get("fileMd5") or [""])[0]
+                    matching_chunk = next(
+                        (fields for fields in chunks if fields["fileMd5"] == file_md5),
+                        None,
+                    )
+                    self.assert_request(matching_chunk is not None)
+                    is_image = matching_chunk["fileName"].endswith(".png")
                     self._write_json(
                         {
                             "code": 200,
                             "data": {
                                 "fileMd5": file_md5,
-                                "documentVersion": "content-version",
+                                "documentVersion": "image-version" if is_image else "content-version",
                                 "status": "SEARCHABLE",
                                 "stages": [
                                     {"stage": stage, "status": "SUCCESS", "attemptCount": 1}
@@ -113,16 +140,27 @@ class RuntimeE2ETest(unittest.TestCase):
                     )
                     return
                 if parsed.path.endswith("/search/hybrid"):
-                    observed["searchQuery"] = query
+                    observed["searchQueries"].append(query)
+                    query_text = (query.get("query") or [""])[0]
+                    is_image = "image inspection code" in query_text
+                    matching_chunk = next(
+                        fields
+                        for fields in chunks
+                        if fields["fileName"].endswith(".png") == is_image
+                    )
                     self._write_json(
                         {
                             "code": 200,
                             "data": [
                                 {
-                                    "fileMd5": file_md5,
-                                    "fileName": "rha-runtime.pptx",
-                                    "textContent": "RHA retention period is seven years.",
-                                    "citations": [citation],
+                                    "fileMd5": matching_chunk["fileMd5"],
+                                    "fileName": matching_chunk["fileName"],
+                                    "textContent": (
+                                        "RHA image inspection code is IMG-2048."
+                                        if is_image
+                                        else "RHA retention period is seven years."
+                                    ),
+                                    "citations": [image_citation if is_image else citation],
                                 }
                             ],
                         },
@@ -145,32 +183,44 @@ class RuntimeE2ETest(unittest.TestCase):
 
         class FakeSocket:
             def __init__(self) -> None:
-                self.messages = iter(
-                    [
-                        '{"chunk":"The retention period is "}',
-                        '{"chunk":"seven years."}',
-                        json.dumps(
-                            {
-                                "type": "completion",
-                                "status": "finished",
-                                "traceId": "runtime-trace",
-                                "citations": [citation],
-                            }
-                        ),
-                    ]
-                )
+                self.messages = None
 
             def settimeout(self, timeout: float) -> None:
                 observed["websocketTimeout"] = timeout
 
             def send(self, value: str) -> None:
-                observed["websocketQuery"] = value
+                observed["websocketQueries"].append(value)
+                is_image = "image inspection code" in value
+                self.messages = iter(
+                    [
+                        json.dumps(
+                            {
+                                "chunk": (
+                                    "The image inspection code is "
+                                    if is_image
+                                    else "The retention period is "
+                                )
+                            }
+                        ),
+                        json.dumps({"chunk": "IMG-2048." if is_image else "seven years."}),
+                        json.dumps(
+                            {
+                                "type": "completion",
+                                "status": "finished",
+                                "traceId": "runtime-trace",
+                                "citations": [image_citation if is_image else citation],
+                            }
+                        ),
+                    ]
+                )
 
             def recv(self) -> str:
+                if self.messages is None:
+                    raise AssertionError("websocket query must be sent before receiving")
                 return next(self.messages)
 
             def close(self) -> None:
-                observed["websocketClosed"] = True
+                observed["websocketClosed"] += 1
 
         def connect_websocket(url: str, *, timeout: float, header: list[str]):
             observed["websocketURL"] = url
@@ -206,17 +256,33 @@ class RuntimeE2ETest(unittest.TestCase):
             thread.join(timeout=2)
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(len(observed["chunkFields"]), 2)
+        self.assertEqual(len(observed["chunkFields"]), 4)
         self.assertEqual(observed["chunkFields"][0], observed["chunkFields"][1])
-        self.assertEqual(observed["merge"]["fileMd5"], observed["chunkFields"][0]["fileMd5"])
-        self.assertEqual(observed["searchQuery"]["query"], ["RHA retention period"])
+        self.assertEqual(observed["chunkFields"][2], observed["chunkFields"][3])
+        self.assertEqual(observed["chunkMediaTypes"], [
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "image/png",
+            "image/png",
+        ])
+        self.assertEqual(observed["merges"][0]["fileMd5"], observed["chunkFields"][0]["fileMd5"])
+        self.assertEqual(observed["merges"][1]["fileMd5"], observed["chunkFields"][2]["fileMd5"])
+        self.assertEqual(
+            [item["query"] for item in observed["searchQueries"]],
+            [["RHA retention period"], ["RHA image inspection code"]],
+        )
         self.assertIn("/chat/secret-jwt", observed["websocketURL"])
         self.assertIn("X-Trace-ID: runtime-trace", observed["websocketHeaders"])
-        self.assertTrue(observed["websocketClosed"])
+        self.assertEqual(observed["websocketQueries"], ["RHA retention period", "RHA image inspection code"])
+        self.assertEqual(observed["websocketClosed"], 2)
+        self.assertEqual(report["schemaVersion"], 2)
         self.assertEqual(report["pipeline"]["status"], "SEARCHABLE")
         self.assertEqual(report["pipeline"]["aliasReadback"]["indices"], ["rha-knowledge-v1"])
         self.assertEqual(report["retrieval"]["hits"][0]["citations"], [citation])
         self.assertEqual(report["websocket"]["citations"], [citation])
+        self.assertEqual(report["image"]["pipeline"]["status"], "SEARCHABLE")
+        self.assertEqual(report["image"]["retrieval"]["hits"][0]["citations"][0]["modality"], "image")
+        self.assertEqual(report["image"]["websocket"]["citations"][0]["image"]["width"], 320)
         self.assertNotIn("secret-jwt", report_text)
         self.assertNotIn(observed["login"]["password"], report_text)
 
@@ -438,6 +504,19 @@ class RuntimeE2ETest(unittest.TestCase):
         self.assertEqual(len(parsed.evidenceUnits), 1)
         self.assertEqual(parsed.evidenceUnits[0].slide, 1)
         self.assertIn("seven years", parsed.evidenceUnits[0].text)
+
+    def test_generated_png_has_real_dimensions_without_external_assets(self) -> None:
+        runtime = load_runtime_module()
+
+        contents = runtime.build_minimal_png(320, 120)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.png"
+            path.write_bytes(contents)
+            from PIL import Image
+
+            with Image.open(path) as image:
+                self.assertEqual(image.format, "PNG")
+                self.assertEqual(image.size, (320, 120))
 
 
 if __name__ == "__main__":

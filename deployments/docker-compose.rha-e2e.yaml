@@ -113,6 +113,11 @@ services:
       RHA_EMBEDDING_BASE_URL: http://model-stub:8010
       RHA_EMBEDDING_MODEL: rha-fixture-embedding
       RHA_EMBEDDING_DIMENSIONS: "8"
+      RHA_IMAGE_OCR_URL: http://model-stub:8010/image/ocr
+      RHA_IMAGE_OCR_TIMEOUT_SECONDS: "30"
+      RHA_IMAGE_MAX_BYTES: "20971520"
+      RHA_IMAGE_MAX_PIXELS: "40000000"
+      RHA_IMAGE_ALLOW_TEXTLESS: "false"
       RHA_ES_URL: http://es:9200
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/healthz')"]

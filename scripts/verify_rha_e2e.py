@@ -5,7 +5,143 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
+
+
+REQUIRED_STAGES = {"parse", "chunk", "embed", "index"}
+IMAGE_MIME_TYPES = {"image/jpeg", "image/png"}
+
+
+def _field(label: str, name: str) -> str:
+    return f"{label}.{name}" if label else name
+
+
+def _verify_document_path(
+    *,
+    label: str,
+    upload: dict,
+    pipeline: dict,
+    retrieval: dict,
+    websocket: dict,
+    trace_id: str,
+    answer: dict | None = None,
+) -> tuple[dict, dict]:
+    chunk_requests = upload.get("chunkRequests") or []
+    successful_indexes = [
+        item.get("chunkIndex")
+        for item in chunk_requests
+        if item.get("statusCode") == 200
+    ]
+    if len(successful_indexes) < 2 or len(set(successful_indexes)) == len(successful_indexes):
+        raise ValueError(
+            f"{_field(label, 'upload.chunkRequests')} must include a successful duplicate chunk request"
+        )
+    if (upload.get("merge") or {}).get("statusCode") != 200:
+        raise ValueError(f"{_field(label, 'upload.merge.statusCode')} must be 200")
+    file_md5 = str(upload.get("fileMd5", ""))
+    if not re.fullmatch(r"[0-9a-f]{32}", file_md5):
+        raise ValueError(f"{_field(label, 'upload.fileMd5')} must be a lowercase MD5 digest")
+    if pipeline.get("status") != "SEARCHABLE":
+        raise ValueError(f"{_field(label, 'pipeline.status')} must be SEARCHABLE")
+    if not pipeline.get("documentVersion"):
+        raise ValueError(f"{_field(label, 'pipeline.documentVersion')} is required")
+    stages = {item.get("stage"): item for item in pipeline.get("stages") or []}
+    if set(stages) != REQUIRED_STAGES or any(
+        stages[stage].get("status") != "SUCCESS"
+        or int(stages[stage].get("attemptCount", 0)) < 1
+        for stage in REQUIRED_STAGES
+    ):
+        raise ValueError(
+            f"{_field(label, 'pipeline.stages')} must contain four successful runtime stages"
+        )
+    if retrieval.get("statusCode") != 200 or not retrieval.get("hits"):
+        raise ValueError(
+            f"{_field(label, 'retrieval.hits')} must contain a successful runtime search result"
+        )
+    current_hits = [
+        hit for hit in retrieval["hits"]
+        if hit.get("fileMd5") == file_md5
+    ]
+    if not current_hits:
+        raise ValueError(f"{_field(label, 'retrieval.hits')} must contain the uploaded file")
+    if retrieval.get("traceId") != trace_id or websocket.get("traceId") != trace_id:
+        raise ValueError(
+            f"{_field(label, 'traceId')} must match across retrieval and websocket observations"
+        )
+    if not str(websocket.get("answer", "")).strip():
+        raise ValueError(
+            f"{_field(label, 'websocket.answer')} must contain streamed response text"
+        )
+    citations = websocket.get("citations") or (answer or {}).get("citations") or []
+    if not citations:
+        raise ValueError(
+            f"{_field(label, 'websocket.citations')} must contain a source-level citation"
+        )
+    current_citations = [
+        citation for citation in citations
+        if citation.get("documentVersion") == pipeline.get("documentVersion")
+    ]
+    if not current_citations:
+        raise ValueError(
+            f"{_field(label, 'websocket.citations')} must include the current documentVersion"
+        )
+    citation = current_citations[0]
+    has_location = (
+        int(citation.get("page", 0)) > 0
+        or int(citation.get("slide", 0)) > 0
+        or bool(citation.get("sheet"))
+        or bool(citation.get("bbox"))
+    )
+    if not has_location or not citation.get("evidenceId"):
+        raise ValueError(
+            f"{_field(label, 'websocket.citations')} must include evidenceId and a source location"
+        )
+    retrieval_citations = [
+        item
+        for hit in current_hits
+        for item in hit.get("citations") or []
+    ]
+    citation_key = (citation.get("evidenceId"), citation.get("documentVersion"))
+    retrieval_citation = next(
+        (
+            item
+            for item in retrieval_citations
+            if (item.get("evidenceId"), item.get("documentVersion")) == citation_key
+        ),
+        None,
+    )
+    if retrieval_citation is None:
+        raise ValueError(
+            f"{_field(label, 'websocket citation')} must match a retrieval citation"
+        )
+    return citation, retrieval_citation
+
+
+def _verify_image_citation(citation: dict, *, field_name: str) -> None:
+    if citation.get("modality") != "image":
+        raise ValueError(f"{field_name}.modality must be modality=image")
+    bbox = citation.get("bbox") or {}
+    coordinates = [bbox.get(name) for name in ("x0", "y0", "x1", "y1")]
+    if (
+        any(type(value) not in (int, float) for value in coordinates)
+        or coordinates[0] < 0
+        or coordinates[1] < 0
+        or coordinates[2] <= coordinates[0]
+        or coordinates[3] <= coordinates[1]
+    ):
+        raise ValueError(f"{field_name}.bbox must contain a positive pixel region")
+    image = citation.get("image") or {}
+    width = image.get("width")
+    height = image.get("height")
+    if type(width) is not int or type(height) is not int or width <= 0 or height <= 0:
+        raise ValueError(f"{field_name} must include positive pixel width and height metadata")
+    if coordinates[2] > width or coordinates[3] > height:
+        raise ValueError(f"{field_name}.bbox must stay inside the image pixel dimensions")
+    if not re.fullmatch(r"[0-9a-f]{64}", str(image.get("assetSha256", ""))):
+        raise ValueError(f"{field_name}.image.assetSha256 must be a lowercase SHA-256 digest")
+    if image.get("mimeType") not in IMAGE_MIME_TYPES:
+        raise ValueError(f"{field_name}.image.mimeType must identify a supported image")
 
 
 def verify(report_path: Path) -> dict:
@@ -15,32 +151,20 @@ def verify(report_path: Path) -> dict:
     auth = report.get("auth") or {}
     if auth.get("tokenAcquired") is not True:
         raise ValueError("auth.tokenAcquired must be true after a runtime login")
-    upload = report.get("upload") or {}
-    chunk_requests = upload.get("chunkRequests") or []
-    successful_indexes = [
-        item.get("chunkIndex")
-        for item in chunk_requests
-        if item.get("statusCode") == 200
-    ]
-    if len(successful_indexes) < 2 or len(set(successful_indexes)) == len(successful_indexes):
-        raise ValueError("upload.chunkRequests must include a successful duplicate chunk request")
-    if (upload.get("merge") or {}).get("statusCode") != 200:
-        raise ValueError("upload.merge.statusCode must be 200")
+    trace_id = report.get("traceId")
+    if not trace_id:
+        raise ValueError("traceId is required")
+
     pipeline = report.get("pipeline") or {}
-    answer = report.get("answer") or {}
-    websocket = report.get("websocket") or {}
-    if pipeline.get("status") != "SEARCHABLE":
-        raise ValueError("pipeline.status must be SEARCHABLE")
-    if not pipeline.get("documentVersion"):
-        raise ValueError("pipeline.documentVersion is required")
-    stages = {item.get("stage"): item for item in pipeline.get("stages") or []}
-    required_stages = {"parse", "chunk", "embed", "index"}
-    if set(stages) != required_stages or any(
-        stages[stage].get("status") != "SUCCESS"
-        or int(stages[stage].get("attemptCount", 0)) < 1
-        for stage in required_stages
-    ):
-        raise ValueError("pipeline.stages must contain four successful runtime stages")
+    _verify_document_path(
+        label="",
+        upload=report.get("upload") or {},
+        pipeline=pipeline,
+        retrieval=report.get("retrieval") or {},
+        websocket=report.get("websocket") or {},
+        trace_id=trace_id,
+        answer=report.get("answer") or {},
+    )
     if pipeline.get("alias") != "rha-knowledge-active":
         raise ValueError("pipeline.alias must point at rha-knowledge-active")
     alias_readback = pipeline.get("aliasReadback") or {}
@@ -50,48 +174,26 @@ def verify(report_path: Path) -> dict:
         or not alias_readback.get("indices")
     ):
         raise ValueError("pipeline.aliasReadback must contain a successful Elasticsearch alias readback")
-    trace_id = report.get("traceId")
-    if not trace_id:
-        raise ValueError("traceId is required")
-    retrieval = report.get("retrieval") or {}
-    if retrieval.get("statusCode") != 200 or not retrieval.get("hits"):
-        raise ValueError("retrieval.hits must contain a successful runtime search result")
-    current_hits = [
-        hit for hit in retrieval["hits"]
-        if hit.get("fileMd5") == upload.get("fileMd5")
-    ]
-    if not current_hits:
-        raise ValueError("retrieval.hits must contain the uploaded file")
-    if retrieval.get("traceId") != trace_id or websocket.get("traceId") != trace_id:
-        raise ValueError("traceId must match across retrieval and websocket observations")
-    if not str(websocket.get("answer", "")).strip():
-        raise ValueError("websocket.answer must contain streamed response text")
-    citations = websocket.get("citations") or answer.get("citations") or []
-    if not citations:
-        raise ValueError("websocket.citations must contain a source-level citation")
-    current_citations = [
-        citation for citation in citations
-        if citation.get("documentVersion") == pipeline.get("documentVersion")
-    ]
-    if not current_citations:
-        raise ValueError("websocket.citations must include the current documentVersion")
-    citation = current_citations[0]
-    has_location = (
-        int(citation.get("page", 0)) > 0
-        or int(citation.get("slide", 0)) > 0
-        or bool(citation.get("sheet"))
-        or bool(citation.get("bbox"))
+
+    if report.get("schemaVersion") != 2:
+        raise ValueError("schemaVersion must be 2 for the image runtime contract")
+    image_path = report.get("image")
+    if not isinstance(image_path, dict):
+        raise ValueError("image runtime path is required")
+    image_citation, retrieval_image_citation = _verify_document_path(
+        label="image",
+        upload=image_path.get("upload") or {},
+        pipeline=image_path.get("pipeline") or {},
+        retrieval=image_path.get("retrieval") or {},
+        websocket=image_path.get("websocket") or {},
+        trace_id=trace_id,
     )
-    if not has_location or not citation.get("evidenceId"):
-        raise ValueError("first citation must include evidenceId and a source location")
-    retrieval_citations = {
-        (item.get("evidenceId"), item.get("documentVersion"))
-        for hit in current_hits
-        for item in hit.get("citations") or []
-    }
-    citation_key = (citation.get("evidenceId"), citation.get("documentVersion"))
-    if citation_key not in retrieval_citations:
-        raise ValueError("websocket citation must match a retrieval citation")
+    if "IMG-2048" not in str(image_path["websocket"].get("answer", "")):
+        raise ValueError("image.websocket.answer must contain the OCR fact IMG-2048")
+    _verify_image_citation(image_citation, field_name="image.websocket.citations[0]")
+    _verify_image_citation(retrieval_image_citation, field_name="image.retrieval.citations[0]")
+    if image_citation != retrieval_image_citation:
+        raise ValueError("image.websocket citation must equal its retrieval citation")
     return report
 
 
@@ -105,7 +207,13 @@ def main() -> int:
         print(f"RHA E2E verification failed: {exc}")
         return 1
     citations = (report.get("websocket") or {}).get("citations") or (report.get("answer") or {}).get("citations")
-    print(f"RHA E2E verified: version={report['pipeline']['documentVersion']} evidence={citations[0]['evidenceId']}")
+    image_citations = report["image"]["websocket"]["citations"]
+    print(
+        "RHA E2E verified: "
+        f"version={report['pipeline']['documentVersion']} evidence={citations[0]['evidenceId']} "
+        f"image_version={report['image']['pipeline']['documentVersion']} "
+        f"image_evidence={image_citations[0]['evidenceId']}"
+    )
     return 0
 
 

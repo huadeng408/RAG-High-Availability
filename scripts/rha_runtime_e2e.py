@@ -7,9 +7,12 @@ import argparse
 import hashlib
 import io
 import json
+import mimetypes
 import secrets
+import struct
 import time
 import zipfile
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -100,7 +103,12 @@ class RuntimeHTTPClient:
             raise RuntimeError(f"{method.upper()} {path} returned HTTP {exc.code}: {detail}") from exc
 
 
-def encode_multipart(fields: dict[str, str], file_name: str, file_bytes: bytes) -> tuple[bytes, str]:
+def encode_multipart(
+    fields: dict[str, str],
+    file_name: str,
+    file_bytes: bytes,
+    media_type: str | None = None,
+) -> tuple[bytes, str]:
     boundary = "----rha-e2e-" + secrets.token_hex(12)
     boundary_bytes = boundary.encode("ascii")
     body = io.BytesIO()
@@ -113,7 +121,8 @@ def encode_multipart(fields: dict[str, str], file_name: str, file_bytes: bytes) 
     body.write(
         f'Content-Disposition: form-data; name="file"; filename="{file_name}"\r\n'.encode("utf-8")
     )
-    body.write(b"Content-Type: application/vnd.openxmlformats-officedocument.presentationml.presentation\r\n\r\n")
+    resolved_media_type = media_type or mimetypes.guess_type(file_name)[0] or "application/octet-stream"
+    body.write(f"Content-Type: {resolved_media_type}\r\n\r\n".encode("ascii"))
     body.write(file_bytes)
     body.write(b"\r\n--" + boundary_bytes + b"--\r\n")
     return body.getvalue(), f"multipart/form-data; boundary={boundary}"
@@ -201,6 +210,29 @@ def build_minimal_pptx(text: str) -> bytes:
     return buffer.getvalue()
 
 
+def build_minimal_png(width: int, height: int) -> bytes:
+    """Build a valid RGB PNG using only the standard library."""
+    if width <= 0 or height <= 0:
+        raise ValueError("PNG dimensions must be positive")
+
+    def png_chunk(kind: bytes, payload: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(payload))
+            + kind
+            + payload
+            + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+        )
+
+    row = b"\x00" + bytes((240, 240, 240)) * width
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + png_chunk(b"IHDR", header)
+        + png_chunk(b"IDAT", zlib.compress(row * height, level=9))
+        + png_chunk(b"IEND", b"")
+    )
+
+
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8080")
@@ -272,62 +304,87 @@ def run_runtime(
         raise RuntimeError("login response did not contain an access token")
     token = str(login_data["token"])
 
+    def upload_and_wait(file_name: str, contents: bytes, media_type: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        file_md5 = hashlib.md5(contents).hexdigest()
+        chunks = split_chunks(contents, 5 * 1024 * 1024)
+        chunk_requests: list[dict[str, int]] = []
+
+        def upload_chunk(chunk_index: int) -> None:
+            chunk = chunks[chunk_index]
+            fields = {
+                "fileMd5": file_md5,
+                "fileName": file_name,
+                "totalSize": str(len(contents)),
+                "chunkIndex": str(chunk_index),
+                "chunkMd5": hashlib.md5(chunk).hexdigest(),
+                "orgTag": "",
+                "isPublic": "false",
+            }
+            body, content_type = encode_multipart(fields, file_name, chunk, media_type)
+            response = client.request_bytes(
+                "POST",
+                "/api/v1/upload/chunk",
+                body,
+                content_type=content_type,
+                token=token,
+            )
+            chunk_requests.append({"chunkIndex": chunk_index, "statusCode": response.status_code})
+
+        for index in range(len(chunks)):
+            upload_chunk(index)
+        upload_chunk(0)
+        merge = client.request_json(
+            "POST",
+            "/api/v1/upload/merge",
+            {"fileMd5": file_md5, "fileName": file_name},
+            token=token,
+        )
+
+        def fetch_pipeline_status() -> dict[str, Any]:
+            response = client.request_json(
+                "GET",
+                "/api/v1/documents/pipeline-status?" + urlencode({"fileMd5": file_md5}),
+                token=token,
+            )
+            data = _response_data(response, "pipeline status")
+            if not isinstance(data, dict):
+                raise RuntimeError("pipeline status response data must be an object")
+            return data
+
+        pipeline_status, poll_count = wait_for_searchable(
+            fetch_pipeline_status,
+            timeout_seconds=args.pipeline_timeout,
+            poll_interval=args.poll_interval,
+        )
+        return (
+            {
+                "fileMd5": file_md5,
+                "fileName": file_name,
+                "chunkCount": len(chunks),
+                "chunkRequests": chunk_requests,
+                "merge": {"statusCode": merge.status_code},
+            },
+            {
+                "source": "GET /api/v1/documents/pipeline-status",
+                "status": pipeline_status.get("status"),
+                "documentVersion": pipeline_status.get("documentVersion"),
+                "pollCount": poll_count,
+                "stages": pipeline_status.get("stages") or [],
+            },
+        )
+
     query = "RHA retention period"
     file_name = f"rha-runtime-{run_suffix}.pptx"
-    contents = build_minimal_pptx(
-        f"RHA retention period is seven years. Runtime evidence marker: {run_suffix}."
+    upload, pipeline = upload_and_wait(
+        file_name,
+        build_minimal_pptx(f"RHA retention period is seven years. Runtime evidence marker: {run_suffix}."),
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     )
-    file_md5 = hashlib.md5(contents).hexdigest()
-    chunks = split_chunks(contents, 5 * 1024 * 1024)
-    chunk_requests: list[dict[str, int]] = []
-
-    def upload_chunk(chunk_index: int) -> None:
-        chunk = chunks[chunk_index]
-        fields = {
-            "fileMd5": file_md5,
-            "fileName": file_name,
-            "totalSize": str(len(contents)),
-            "chunkIndex": str(chunk_index),
-            "chunkMd5": hashlib.md5(chunk).hexdigest(),
-            "orgTag": "",
-            "isPublic": "false",
-        }
-        body, content_type = encode_multipart(fields, file_name, chunk)
-        response = client.request_bytes(
-            "POST",
-            "/api/v1/upload/chunk",
-            body,
-            content_type=content_type,
-            token=token,
-        )
-        chunk_requests.append({"chunkIndex": chunk_index, "statusCode": response.status_code})
-
-    for index in range(len(chunks)):
-        upload_chunk(index)
-    upload_chunk(0)
-
-    merge = client.request_json(
-        "POST",
-        "/api/v1/upload/merge",
-        {"fileMd5": file_md5, "fileName": file_name},
-        token=token,
-    )
-
-    def fetch_pipeline_status() -> dict[str, Any]:
-        response = client.request_json(
-            "GET",
-            "/api/v1/documents/pipeline-status?" + urlencode({"fileMd5": file_md5}),
-            token=token,
-        )
-        data = _response_data(response, "pipeline status")
-        if not isinstance(data, dict):
-            raise RuntimeError("pipeline status response data must be an object")
-        return data
-
-    pipeline_status, poll_count = wait_for_searchable(
-        fetch_pipeline_status,
-        timeout_seconds=args.pipeline_timeout,
-        poll_interval=args.poll_interval,
+    image_query = "RHA image inspection code"
+    image_upload, image_pipeline = upload_and_wait(
+        f"rha-image-{run_suffix}.png",
+        build_minimal_png(320, 120),
+        "image/png",
     )
 
     alias_name = "rha-knowledge-active"
@@ -349,71 +406,74 @@ def run_runtime(
     if not alias_indices:
         raise RuntimeError(f"Elasticsearch alias {alias_name} has no active index")
 
-    search = client.request_json(
-        "GET",
-        "/api/v1/search/hybrid?" + urlencode({"query": query, "topK": 5}),
-        token=token,
-    )
-    hits = _response_data(search, "hybrid search")
-    if not isinstance(hits, list):
-        raise RuntimeError("hybrid search response data must be a list")
-    retrieval_trace_id = _response_header(search, "X-Trace-ID")
-
-    connector = websocket_connect or _connect_websocket
-    socket = connector(
-        _websocket_url(args.base_url, token),
-        timeout=args.websocket_timeout,
-        header=[f"X-Trace-ID: {trace_id}"],
-    )
-    try:
-        answer, completion, _events = collect_websocket_answer(
-            socket,
-            query,
-            timeout_seconds=args.websocket_timeout,
+    def retrieve_and_chat(document_query: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        search = client.request_json(
+            "GET",
+            "/api/v1/search/hybrid?" + urlencode({"query": document_query, "topK": 5}),
+            token=token,
         )
-    finally:
-        socket.close()
+        hits = _response_data(search, "hybrid search")
+        if not isinstance(hits, list):
+            raise RuntimeError("hybrid search response data must be a list")
+
+        connector = websocket_connect or _connect_websocket
+        socket = connector(
+            _websocket_url(args.base_url, token),
+            timeout=args.websocket_timeout,
+            header=[f"X-Trace-ID: {trace_id}"],
+        )
+        try:
+            answer, completion, _events = collect_websocket_answer(
+                socket,
+                document_query,
+                timeout_seconds=args.websocket_timeout,
+            )
+        finally:
+            socket.close()
+        return (
+            {
+                "source": "GET /api/v1/search/hybrid",
+                "statusCode": search.status_code,
+                "traceId": _response_header(search, "X-Trace-ID"),
+                "hits": hits,
+            },
+            {
+                "source": "GET /chat/:token",
+                "traceId": completion.get("traceId"),
+                "answer": answer,
+                "citations": completion.get("citations") or [],
+            },
+        )
+
+    retrieval, websocket = retrieve_and_chat(query)
+    image_retrieval, image_websocket = retrieve_and_chat(image_query)
 
     report = {
         "reportKind": "rha-runtime-e2e",
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "traceId": trace_id,
         "auth": {
             "registerStatusCode": register.status_code,
             "loginStatusCode": login.status_code,
             "tokenAcquired": True,
         },
-        "upload": {
-            "fileMd5": file_md5,
-            "fileName": file_name,
-            "chunkCount": len(chunks),
-            "chunkRequests": chunk_requests,
-            "merge": {"statusCode": merge.status_code},
-        },
+        "upload": upload,
         "pipeline": {
-            "source": "GET /api/v1/documents/pipeline-status",
-            "status": pipeline_status.get("status"),
-            "documentVersion": pipeline_status.get("documentVersion"),
+            **pipeline,
             "alias": alias_name,
             "aliasReadback": {
                 "source": f"GET /_alias/{alias_name}",
                 "statusCode": alias_response.status_code,
                 "indices": alias_indices,
             },
-            "pollCount": poll_count,
-            "stages": pipeline_status.get("stages") or [],
         },
-        "retrieval": {
-            "source": "GET /api/v1/search/hybrid",
-            "statusCode": search.status_code,
-            "traceId": retrieval_trace_id,
-            "hits": hits,
-        },
-        "websocket": {
-            "source": "GET /chat/:token",
-            "traceId": completion.get("traceId"),
-            "answer": answer,
-            "citations": completion.get("citations") or [],
+        "retrieval": retrieval,
+        "websocket": websocket,
+        "image": {
+            "upload": image_upload,
+            "pipeline": image_pipeline,
+            "retrieval": image_retrieval,
+            "websocket": image_websocket,
         },
     }
     output_path = Path(args.out)

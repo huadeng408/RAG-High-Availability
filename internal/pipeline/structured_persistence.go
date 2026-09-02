@@ -57,6 +57,7 @@ func buildStructuredVectors(task tasks.FileProcessingTask, parsed model.ParsedDo
 				row.RowEnd = first.RowEnd
 			}
 			row.BBox = first.BBox
+			row.Image = first.Image
 			if row.Modality == "" {
 				row.Modality = first.Modality
 			}

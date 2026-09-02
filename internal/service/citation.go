@@ -16,6 +16,7 @@ func CitationFromDocument(document model.EsDocument) model.Citation {
 		Slide:           document.Slide,
 		Sheet:           document.Sheet,
 		BBox:            document.BBox,
+		Image:           document.Image,
 		Excerpt:         document.TextContent,
 	}
 }

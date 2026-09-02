@@ -26,7 +26,9 @@ from .models import (
     ParseRequestPayload,
     ParseResponsePayload,
 )
-from .structured_ingestion import FixtureParser, ParserRegistry, chunks_from_evidence
+from .evidence_chunking import chunks_from_evidence
+from .image_ingestion import HTTPImageOCRAdapter, ImageParser, OpenAICompatibleVLMAdapter
+from .structured_ingestion import FixtureParser, ParserRegistry
 from .trace import current_trace_id, elapsed_ms, log_request
 
 TOKEN_CHUNK_SIZE = 500
@@ -50,9 +52,34 @@ class IngestionService:
         fallback_kwargs = dict(embedding_kwargs)
         fallback_kwargs.pop("dimensions", None)
         self._embeddings_without_dimensions = OpenAIEmbeddings(**fallback_kwargs)
+        image_ocr = (
+            HTTPImageOCRAdapter(settings.image_ocr_url, settings.image_ocr_timeout_seconds)
+            if settings.image_ocr_url
+            else None
+        )
+        image_vlm = (
+            OpenAICompatibleVLMAdapter(
+                base_url=settings.image_vlm.base_url,
+                api_key=settings.image_vlm.api_key,
+                model=settings.image_vlm.model,
+                timeout_seconds=settings.image_vlm_timeout_seconds,
+                max_tokens=settings.image_vlm.max_tokens,
+            )
+            if settings.image_vlm_enabled
+            else None
+        )
+        image_parser = ImageParser(
+            ocr=image_ocr,
+            vlm=image_vlm,
+            max_bytes=settings.image_max_bytes,
+            max_pixels=settings.image_max_pixels,
+            allowed_mime_types=settings.image_allowed_mime_types,
+            allow_textless=settings.image_allow_textless,
+        )
         self._parser_registry = ParserRegistry(
             settings.mineru_command,
             settings.mineru_timeout_seconds,
+            image_parser=image_parser,
         )
         _warm_splitter_cache()
 
@@ -244,6 +271,8 @@ def _detect_file_type(file_name: str) -> str:
         return "ppt"
     if lower_name.endswith((".xls", ".xlsx", ".csv")):
         return "excel"
+    if lower_name.endswith((".png", ".jpg", ".jpeg")):
+        return "image"
     return "default"
 
 

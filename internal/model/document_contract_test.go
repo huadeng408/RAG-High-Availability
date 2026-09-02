@@ -53,3 +53,29 @@ func TestCitationKeepsPageBoundingBoxAndSource(t *testing.T) {
 		t.Fatalf("citation lost source provenance: %#v", citation)
 	}
 }
+
+func TestCitationKeepsImagePixelMetadata(t *testing.T) {
+	citation := NewCitation(EvidenceUnit{
+		ID:              "image-01",
+		DocumentVersion: "v-image",
+		Modality:        "image",
+		BBox:            &BoundingBox{X0: 12, Y0: 16, X1: 220, Y1: 48},
+		Image: &ImageMetadata{
+			AssetSHA256:           "asset-sha",
+			MIMEType:              "image/png",
+			Width:                 640,
+			Height:                480,
+			OrientationNormalized: true,
+			OCRConfidence:         0.98,
+		},
+		Text:      "Gauge P-204 reads 10 bar.",
+		AssetPath: "merged/image.png",
+	})
+
+	if citation.Image == nil || citation.Image.Width != 640 || citation.Image.Height != 480 {
+		t.Fatalf("citation lost image dimensions: %#v", citation)
+	}
+	if citation.Image.AssetSHA256 != "asset-sha" || citation.Image.MIMEType != "image/png" {
+		t.Fatalf("citation lost image identity: %#v", citation.Image)
+	}
+}

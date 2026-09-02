@@ -6,7 +6,6 @@ import json
 import re
 import subprocess
 import zipfile
-from collections.abc import Iterable
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -15,8 +14,9 @@ from .models import (
     EvidenceUnitPayload,
     ParsedDocumentPayload,
     ParserReceiptPayload,
-    StructuredChunkPayload,
 )
+from .evidence_chunking import chunks_from_evidence
+from .image_ingestion import ImageParser
 
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "testdata" / "rha_multimodal_fixture.json"
@@ -67,29 +67,6 @@ def parse_fixture_document(modality: str, document_version: str) -> ParsedDocume
         evidenceUnits=evidence,
         chunks=chunks_from_evidence(evidence),
     )
-
-
-def chunks_from_evidence(evidence_units: Iterable[EvidenceUnitPayload]) -> list[StructuredChunkPayload]:
-    chunks: list[StructuredChunkPayload] = []
-    for unit in evidence_units:
-        if not unit.text.strip():
-            continue
-        chunks.append(
-            StructuredChunkPayload(
-                id=f"{unit.documentVersion}:{unit.evidenceId}:chunk",
-                documentVersion=unit.documentVersion,
-                text=unit.text,
-                modality=unit.modality,
-                headingPath=unit.headingPath,
-                page=unit.page,
-                slide=unit.slide,
-                sheet=unit.sheet,
-                rowStart=unit.rowStart,
-                rowEnd=unit.rowEnd,
-                evidenceIds=[unit.evidenceId],
-            )
-        )
-    return chunks
 
 
 class FixtureParser:
@@ -294,12 +271,13 @@ class PlainTextParser:
 
 
 class ParserRegistry:
-    def __init__(self, mineru_command: str, mineru_timeout_seconds: int) -> None:
+    def __init__(self, mineru_command: str, mineru_timeout_seconds: int, image_parser: ImageParser | None = None) -> None:
         self._pdf = MinerUParser(mineru_command, mineru_timeout_seconds)
         self._word = WordParser()
         self._ppt = PptParser()
         self._excel = ExcelParser()
         self._text = PlainTextParser()
+        self._image = image_parser
 
     def parse(self, source_path: Path, document_version: str) -> ParsedDocumentPayload:
         suffix = source_path.suffix.lower()
@@ -311,6 +289,10 @@ class ParserRegistry:
             return self._ppt.parse(source_path, document_version)
         if suffix == ".xlsx":
             return self._excel.parse(source_path, document_version)
+        if suffix in {".png", ".jpg", ".jpeg"}:
+            if self._image is None:
+                raise StructuredParseError("image parser is not configured")
+            return self._image.parse(source_path, document_version)
         return self._text.parse(source_path, document_version)
 
 

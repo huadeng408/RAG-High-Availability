@@ -24,6 +24,7 @@ func TestBuildStructuredVectorsPreservesVersionAndEvidenceLocation(t *testing.T)
 			ElementType:     "ocr_text",
 			Page:            2,
 			BBox:            &model.BoundingBox{X0: 10, Y0: 20, X1: 30, Y1: 40},
+			Image:           &model.ImageMetadata{AssetSHA256: "asset-sha", MIMEType: "image/png", Width: 640, Height: 480},
 			Text:            "The retention period is seven years.",
 		}},
 	}
@@ -52,6 +53,9 @@ func TestBuildStructuredVectorsPreservesVersionAndEvidenceLocation(t *testing.T)
 	}
 	if got.BBox == nil || got.BBox.Y1 != 40 {
 		t.Fatalf("lost bbox: %#v", got.BBox)
+	}
+	if got.Image == nil || got.Image.AssetSHA256 != "asset-sha" || got.Image.Width != 640 {
+		t.Fatalf("lost image metadata: %#v", got.Image)
 	}
 }
 

@@ -156,7 +156,18 @@ func createIndexIfNotExists(indexName string, vectorDims int) error {
 				"slide": { "type": "integer" },
 				"sheet": { "type": "keyword" },
 				"evidence_ids": { "type": "keyword" },
-				"bbox": { "type": "object" }
+				"bbox": { "type": "object" },
+				"image": {
+					"properties": {
+						"assetSha256": { "type": "keyword" },
+						"mimeType": { "type": "keyword" },
+						"width": { "type": "integer" },
+						"height": { "type": "integer" },
+						"orientationNormalized": { "type": "boolean" },
+						"ocrConfidence": { "type": "float" },
+						"visionModel": { "type": "keyword" }
+					}
+				}
 			}
 		}
 	}`, vectorDims)

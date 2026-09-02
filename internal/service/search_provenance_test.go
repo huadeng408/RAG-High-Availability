@@ -30,6 +30,7 @@ func TestSearchOnceRequestsEvidenceSourceFieldsAndBuildsCitation(t *testing.T) {
 		"sheet":            {},
 		"evidence_ids":     {},
 		"bbox":             {},
+		"image":            {},
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		defer request.Body.Close()
@@ -63,12 +64,18 @@ func TestSearchOnceRequestsEvidenceSourceFieldsAndBuildsCitation(t *testing.T) {
 		}
 		if allProvenanceRequested {
 			source["document_version"] = "v-invoice"
-			source["modality"] = "pdf"
+			source["modality"] = "image"
 			source["page"] = 2
 			source["slide"] = 0
 			source["sheet"] = ""
 			source["evidence_ids"] = []string{"e-invoice-page-2"}
 			source["bbox"] = map[string]float64{"x0": 12, "y0": 16, "x1": 220, "y1": 48}
+			source["image"] = map[string]any{
+				"assetSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"mimeType":    "image/png",
+				"width":       320,
+				"height":      120,
+			}
 		}
 		_ = json.NewEncoder(writer).Encode(map[string]any{
 			"hits": map[string]any{"hits": []any{map[string]any{"_id": "hit-1", "_score": 1.0, "_source": source}}},
@@ -83,7 +90,7 @@ func TestSearchOnceRequestsEvidenceSourceFieldsAndBuildsCitation(t *testing.T) {
 	service := &searchService{
 		esClient:   client,
 		indexName:  "rha-knowledge-active",
-		uploadRepo: provenanceUploadRepository{files: []*model.FileUpload{{FileMD5: "file-md5", FileName: "invoice.pdf"}}},
+		uploadRepo: provenanceUploadRepository{files: []*model.FileUpload{{FileMD5: "file-md5", FileName: "inspection.png"}}},
 	}
 
 	hits, err := service.searchOnce(context.Background(), map[string]any{"query": map[string]any{"match_all": map[string]any{}}, "_source": buildSourceFields()})
@@ -98,7 +105,10 @@ func TestSearchOnceRequestsEvidenceSourceFieldsAndBuildsCitation(t *testing.T) {
 		t.Fatalf("missing citation from Elasticsearch hit: %#v", results)
 	}
 	citation := results[0].Citations[0]
-	if citation.EvidenceID != "e-invoice-page-2" || citation.Page != 2 || citation.BBox == nil || citation.BBox.X0 != 12 || citation.SourcePath != "merged/file-md5/invoice.pdf" {
+	if citation.EvidenceID != "e-invoice-page-2" || citation.BBox == nil || citation.BBox.X0 != 12 || citation.SourcePath != "merged/file-md5/inspection.png" {
 		t.Fatalf("lost search provenance: %#v", citation)
+	}
+	if citation.Image == nil || citation.Image.MIMEType != "image/png" || citation.Image.Width != 320 {
+		t.Fatalf("lost image provenance: %#v", citation.Image)
 	}
 }

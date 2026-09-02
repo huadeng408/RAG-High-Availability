@@ -413,6 +413,7 @@ func (p *Processor) processIndex(ctx context.Context, task tasks.FileProcessingT
 			Sheet:           item.Sheet,
 			EvidenceIDs:     item.EvidenceIDs,
 			BBox:            item.BBox,
+			Image:           item.Image,
 		})
 	}
 
@@ -730,6 +731,7 @@ func (p *Processor) processIndexExternal(ctx context.Context, task tasks.FilePro
 			Sheet:           item.Sheet,
 			EvidenceIDs:     item.EvidenceIDs,
 			BBox:            item.BBox,
+			Image:           item.Image,
 		})
 	}
 

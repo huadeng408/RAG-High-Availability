@@ -39,24 +39,36 @@ type BoundingBox struct {
 	Y1 float64 `json:"y1"`
 }
 
+// ImageMetadata identifies normalized image pixels and their coordinate space.
+type ImageMetadata struct {
+	AssetSHA256           string  `json:"assetSha256"`
+	MIMEType              string  `json:"mimeType"`
+	Width                 int     `json:"width"`
+	Height                int     `json:"height"`
+	OrientationNormalized bool    `json:"orientationNormalized,omitempty"`
+	OCRConfidence         float64 `json:"ocrConfidence,omitempty"`
+	VisionModel           string  `json:"visionModel,omitempty"`
+}
+
 // EvidenceUnit is the smallest citeable source element.
 type EvidenceUnit struct {
-	ID              string       `json:"evidenceId"`
-	DocumentVersion string       `json:"documentVersion"`
-	Modality        string       `json:"modality"`
-	ElementType     string       `json:"elementType"`
-	Page            int          `json:"page,omitempty"`
-	Slide           int          `json:"slide,omitempty"`
-	Sheet           string       `json:"sheet,omitempty"`
-	RowStart        int          `json:"rowStart,omitempty"`
-	RowEnd          int          `json:"rowEnd,omitempty"`
-	HeadingPath     []string     `json:"headingPath,omitempty"`
-	Header          []string     `json:"header,omitempty"`
-	BBox            *BoundingBox `json:"bbox,omitempty"`
-	Text            string       `json:"text"`
-	ParserName      string       `json:"parserName"`
-	ParserVersion   string       `json:"parserVersion"`
-	AssetPath       string       `json:"assetPath"`
+	ID              string         `json:"evidenceId"`
+	DocumentVersion string         `json:"documentVersion"`
+	Modality        string         `json:"modality"`
+	ElementType     string         `json:"elementType"`
+	Page            int            `json:"page,omitempty"`
+	Slide           int            `json:"slide,omitempty"`
+	Sheet           string         `json:"sheet,omitempty"`
+	RowStart        int            `json:"rowStart,omitempty"`
+	RowEnd          int            `json:"rowEnd,omitempty"`
+	HeadingPath     []string       `json:"headingPath,omitempty"`
+	Header          []string       `json:"header,omitempty"`
+	BBox            *BoundingBox   `json:"bbox,omitempty"`
+	Image           *ImageMetadata `json:"image,omitempty"`
+	Text            string         `json:"text"`
+	ParserName      string         `json:"parserName"`
+	ParserVersion   string         `json:"parserVersion"`
+	AssetPath       string         `json:"assetPath"`
 }
 
 // StructuredChunk is the retrieval unit built from one or more evidence units.
@@ -111,16 +123,17 @@ func (chunk StructuredChunk) Validate(evidenceByID map[string]EvidenceUnit) erro
 
 // Citation is provenance returned with an answer or search result.
 type Citation struct {
-	EvidenceID      string       `json:"evidenceId"`
-	Label           string       `json:"label"`
-	DocumentVersion string       `json:"documentVersion"`
-	Modality        string       `json:"modality"`
-	Page            int          `json:"page,omitempty"`
-	Slide           int          `json:"slide,omitempty"`
-	Sheet           string       `json:"sheet,omitempty"`
-	BBox            *BoundingBox `json:"bbox,omitempty"`
-	Excerpt         string       `json:"excerpt"`
-	SourcePath      string       `json:"sourcePath"`
+	EvidenceID      string         `json:"evidenceId"`
+	Label           string         `json:"label"`
+	DocumentVersion string         `json:"documentVersion"`
+	Modality        string         `json:"modality"`
+	Page            int            `json:"page,omitempty"`
+	Slide           int            `json:"slide,omitempty"`
+	Sheet           string         `json:"sheet,omitempty"`
+	BBox            *BoundingBox   `json:"bbox,omitempty"`
+	Image           *ImageMetadata `json:"image,omitempty"`
+	Excerpt         string         `json:"excerpt"`
+	SourcePath      string         `json:"sourcePath"`
 }
 
 // NewCitation retains the source location needed for page-level evidence.
@@ -142,6 +155,7 @@ func NewCitation(evidence EvidenceUnit) Citation {
 		Slide:           evidence.Slide,
 		Sheet:           evidence.Sheet,
 		BBox:            evidence.BBox,
+		Image:           evidence.Image,
 		Excerpt:         evidence.Text,
 		SourcePath:      evidence.AssetPath,
 	}

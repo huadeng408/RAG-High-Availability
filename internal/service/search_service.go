@@ -674,6 +674,7 @@ func buildSourceFields() []string {
 		"sheet",
 		"evidence_ids",
 		"bbox",
+		"image",
 	}
 }
 

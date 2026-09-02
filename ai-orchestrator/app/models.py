@@ -27,6 +27,16 @@ class BoundingBoxPayload(BaseModel):
     y1: float
 
 
+class ImageMetadataPayload(BaseModel):
+    assetSha256: str
+    mimeType: str
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    orientationNormalized: bool = False
+    ocrConfidence: float | None = Field(default=None, ge=0, le=1)
+    visionModel: str = ""
+
+
 class CitationPayload(BaseModel):
     evidenceId: str
     label: str = ""
@@ -36,6 +46,7 @@ class CitationPayload(BaseModel):
     slide: int = 0
     sheet: str = ""
     bbox: BoundingBoxPayload | None = None
+    image: ImageMetadataPayload | None = None
     excerpt: str = ""
     sourcePath: str = ""
 
@@ -234,6 +245,7 @@ class EvidenceUnitPayload(BaseModel):
     headingPath: list[str] = Field(default_factory=list)
     header: list[str] = Field(default_factory=list)
     bbox: BoundingBoxPayload | None = None
+    image: ImageMetadataPayload | None = None
     text: str
     parserName: str = ""
     parserVersion: str = ""

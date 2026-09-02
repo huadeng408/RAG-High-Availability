@@ -16,9 +16,10 @@ RHA 为不同文档结构使用不同的切分和证据模型，解析结果携�
 | Word | 按标题层级维护 `headingPath`，按段落生成证据 | 标题路径 |
 | PowerPoint | 按 Slide 提取文本 | Slide 编号 |
 | Excel | 按 Sheet 和表头读取，按行窗口切分 | Sheet、表头、行范围 |
+| 图片 | PNG/JPEG 解码校验、EXIF 方向归一化、OCR，可选 VLM 摘要 | 像素 `bbox`、宽高、规范化资源 SHA-256 |
 | TXT / Markdown | 按文本块切分 | 来源文件 |
 
-生产 PDF 路由要求 MinerU 输出包含 OCR 确认和页面 `bbox` 的 JSON 回执；MinerU 不可用时会明确失败，不回退到 Tika。Word、PPT 和 Excel 使用 Python 结构化解析器，结构化片段和证据 ID 会一路传递到索引和问答引用。
+生产 PDF 路由要求 MinerU 输出包含 OCR 确认和页面 `bbox` 的 JSON 回执；MinerU 不可用时会明确失败，不回退到 Tika。图片先执行真实 MIME、字节数和像素数校验，再归一化方向并生成稳定资源哈希；OCR 文本区域和可选 VLM 摘要都会形成独立的版本化证据。所有结构化片段和证据 ID 会一路传递到索引和问答引用。
 
 ### 可恢复的文档入库
 
@@ -90,7 +91,7 @@ flowchart LR
 | AI 编排 | Python、FastAPI、LangGraph、LangChain |
 | 数据与消息 | MySQL 8、Redis 7、Kafka、Elasticsearch 8、MinIO |
 | 模型服务 | OpenAI 兼容的 LLM / Embedding、Cross-Encoder Reranker |
-| 文档处理 | MinerU + OCR、Office Open XML 结构化解析 |
+| 文档处理 | MinerU + OCR、Office Open XML 结构化解析、Pillow、可插拔图片 OCR/VLM |
 | 前端 | Vue 3、TypeScript、Vite、Naive UI、Pinia |
 | 可观测性 | OpenTelemetry API 接入点、结构化日志、Trace ID 传播 |
 
@@ -125,7 +126,7 @@ benchmarks/                 离线评测集与结果样例
 docker compose -f deployments/docker-compose.yaml up -d
 ```
 
-该 Compose 文件会启动 MySQL、Redis、MinIO、Kafka、Zookeeper、Elasticsearch、Tika、Embedding 和 Reranker。默认端口见 [docs/local-dev-runbook.md](docs/local-dev-runbook.md)。本地默认账号和密钥只用于开发，部署前请替换。
+该 Compose 文件会启动 MySQL、Redis、MinIO、Kafka、Zookeeper、Elasticsearch、Embedding 和 Reranker 等本地依赖。默认端口见 [docs/local-dev-runbook.md](docs/local-dev-runbook.md)。本地默认账号和密钥只用于开发，部署前请替换。
 
 ### 2. 初始化并启动 Go API
 
@@ -217,7 +218,15 @@ python scripts/verify_langgraph_stack.py \
   --out benchmarks/results/langgraph-stack-smoke.json
 ```
 
-离线检索、RAG 流式和上传基准的命令与指标定义见 [docs/benchmark-guide.md](docs/benchmark-guide.md)。仓库中的历史上传样本 `benchmarks/results/upload-baguwen-benchmark.json` 记录了 120 份文档的上传成功率 100%，合并 P95 约 2.445 秒
+离线检索、RAG 流式和上传基准的命令与指标定义见 [docs/benchmark-guide.md](docs/benchmark-guide.md)。仓库中的历史上传样本 `benchmarks/results/upload-baguwen-benchmark.json` 记录了 120 份文档的上传成功率 100%，合并 P95 约 2.445 秒。
+
+运行隔离的 Docker 端到端验收（真实 Go API、Kafka、Python 生产解析器、MySQL、Elasticsearch 和 WebSocket，模型与 OCR 使用确定性本地桩）：
+
+```bash
+bash scripts/run_rha_e2e.sh
+```
+
+验收报告写入 `benchmarks/results/rha-e2e.json`，校验上传幂等、四阶段入库、PPT 与图片检索、Alias 读回、流式回答和来源引用。该报告用于功能验收，不代表生产模型效果或吞吐性能。
 
 
 ## 设计文档

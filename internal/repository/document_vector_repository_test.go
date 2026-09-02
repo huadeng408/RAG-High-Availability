@@ -21,6 +21,7 @@ func TestDocumentVectorRepositoryPreservesStructuredProvenance(t *testing.T) {
 		FileMD5: "checksum", DocumentVersion: "version-1", ChunkID: 0,
 		TextContent: "retention", Modality: "pdf", Page: 2,
 		EvidenceIDs: []string{"evidence-1"}, BBox: &model.BoundingBox{X0: 1, Y0: 2, X1: 3, Y1: 4},
+		Image: &model.ImageMetadata{AssetSHA256: "asset-sha", MIMEType: "image/png", Width: 640, Height: 480},
 	}
 	if err := repo.BatchCreate([]*model.DocumentVector{want}); err != nil {
 		t.Fatal(err)
@@ -34,5 +35,8 @@ func TestDocumentVectorRepositoryPreservesStructuredProvenance(t *testing.T) {
 	}
 	if len(got[0].EvidenceIDs) != 1 || got[0].EvidenceIDs[0] != "evidence-1" || got[0].BBox == nil || got[0].BBox.X1 != 3 {
 		t.Fatalf("provenance did not round-trip: %#v", got[0])
+	}
+	if got[0].Image == nil || got[0].Image.AssetSHA256 != "asset-sha" || got[0].Image.Width != 640 {
+		t.Fatalf("image metadata did not round-trip: %#v", got[0].Image)
 	}
 }

@@ -28,6 +28,7 @@ type evidenceRecord struct {
 	HeadingPathJSON []byte `gorm:"column:heading_path"`
 	HeaderJSON      []byte `gorm:"column:header"`
 	BBoxJSON        []byte `gorm:"column:bbox"`
+	ImageJSON       []byte `gorm:"column:image_metadata"`
 	Text            string `gorm:"column:text_content"`
 	ParserName      string `gorm:"column:parser_name"`
 	ParserVersion   string `gorm:"column:parser_version"`
@@ -60,7 +61,11 @@ func (r *evidenceRepository) ReplaceForVersion(documentVersion string, evidence 
 			if err != nil {
 				return err
 			}
-			record := evidenceRecord{ID: unit.ID, DocumentVersion: documentVersion, Modality: unit.Modality, ElementType: unit.ElementType, Page: unit.Page, Slide: unit.Slide, Sheet: unit.Sheet, RowStart: unit.RowStart, RowEnd: unit.RowEnd, HeadingPathJSON: headingPath, HeaderJSON: header, BBoxJSON: bbox, Text: unit.Text, ParserName: unit.ParserName, ParserVersion: unit.ParserVersion, AssetPath: unit.AssetPath}
+			image, err := json.Marshal(unit.Image)
+			if err != nil {
+				return err
+			}
+			record := evidenceRecord{ID: unit.ID, DocumentVersion: documentVersion, Modality: unit.Modality, ElementType: unit.ElementType, Page: unit.Page, Slide: unit.Slide, Sheet: unit.Sheet, RowStart: unit.RowStart, RowEnd: unit.RowEnd, HeadingPathJSON: headingPath, HeaderJSON: header, BBoxJSON: bbox, ImageJSON: image, Text: unit.Text, ParserName: unit.ParserName, ParserVersion: unit.ParserVersion, AssetPath: unit.AssetPath}
 			if err := tx.Create(&record).Error; err != nil {
 				return err
 			}
@@ -94,7 +99,13 @@ func (r *evidenceRepository) ListByVersion(documentVersion string) ([]model.Evid
 				return nil, err
 			}
 		}
-		evidence = append(evidence, model.EvidenceUnit{ID: record.ID, DocumentVersion: record.DocumentVersion, Modality: record.Modality, ElementType: record.ElementType, Page: record.Page, Slide: record.Slide, Sheet: record.Sheet, RowStart: record.RowStart, RowEnd: record.RowEnd, HeadingPath: headingPath, Header: header, BBox: bbox, Text: record.Text, ParserName: record.ParserName, ParserVersion: record.ParserVersion, AssetPath: record.AssetPath})
+		var image *model.ImageMetadata
+		if len(record.ImageJSON) > 0 && string(record.ImageJSON) != "null" {
+			if err := json.Unmarshal(record.ImageJSON, &image); err != nil {
+				return nil, err
+			}
+		}
+		evidence = append(evidence, model.EvidenceUnit{ID: record.ID, DocumentVersion: record.DocumentVersion, Modality: record.Modality, ElementType: record.ElementType, Page: record.Page, Slide: record.Slide, Sheet: record.Sheet, RowStart: record.RowStart, RowEnd: record.RowEnd, HeadingPath: headingPath, Header: header, BBox: bbox, Image: image, Text: record.Text, ParserName: record.ParserName, ParserVersion: record.ParserVersion, AssetPath: record.AssetPath})
 	}
 	return evidence, nil
 }

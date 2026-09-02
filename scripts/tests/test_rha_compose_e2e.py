@@ -38,6 +38,7 @@ class RhaComposeE2ETest(unittest.TestCase):
 
         orchestrator_env = config["services"]["orchestrator"]["environment"]
         self.assertEqual(orchestrator_env["RHA_INGESTION_MODE"], "production")
+        self.assertEqual(orchestrator_env["RHA_IMAGE_OCR_URL"], "http://model-stub:8010/image/ocr")
         published_ports = {
             str(port.get("published"))
             for port in config["services"]["es"].get("ports", [])

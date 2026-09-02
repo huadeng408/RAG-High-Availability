@@ -49,6 +49,15 @@ class Settings:
     ingestion_mode: str
     mineru_command: str
     mineru_timeout_seconds: int
+    image_allowed_mime_types: tuple[str, ...]
+    image_max_bytes: int
+    image_max_pixels: int
+    image_ocr_url: str
+    image_ocr_timeout_seconds: int
+    image_allow_textless: bool
+    image_vlm_enabled: bool
+    image_vlm_timeout_seconds: int
+    image_vlm: ModelSettings
     es_url: str
     es_username: str
     es_password: str
@@ -84,6 +93,14 @@ def load_settings() -> Settings:
         top_p=0.0,
         max_tokens=0,
     )
+    image_vlm = ModelSettings(
+        base_url=os.getenv("RHA_IMAGE_VLM_BASE_URL", llm.base_url).strip(),
+        api_key=os.getenv("RHA_IMAGE_VLM_API_KEY", llm.api_key).strip(),
+        model=os.getenv("RHA_IMAGE_VLM_MODEL", "").strip(),
+        temperature=0.0,
+        top_p=1.0,
+        max_tokens=_get_int("RHA_IMAGE_VLM_MAX_TOKENS", 384),
+    )
     return Settings(
         host=os.getenv("RHA_HOST", "0.0.0.0").strip(),
         port=_get_int("RHA_PORT", 8090),
@@ -97,6 +114,19 @@ def load_settings() -> Settings:
         ingestion_mode=os.getenv("RHA_INGESTION_MODE", "production").strip().lower(),
         mineru_command=os.getenv("RHA_MINERU_COMMAND", "mineru").strip(),
         mineru_timeout_seconds=_get_int("RHA_MINERU_TIMEOUT_SECONDS", 120),
+        image_allowed_mime_types=tuple(
+            item.strip().lower()
+            for item in os.getenv("RHA_IMAGE_ALLOWED_MIME_TYPES", "image/png,image/jpeg").split(",")
+            if item.strip()
+        ),
+        image_max_bytes=_get_int("RHA_IMAGE_MAX_BYTES", 20 * 1024 * 1024),
+        image_max_pixels=_get_int("RHA_IMAGE_MAX_PIXELS", 40_000_000),
+        image_ocr_url=os.getenv("RHA_IMAGE_OCR_URL", "").strip(),
+        image_ocr_timeout_seconds=_get_int("RHA_IMAGE_OCR_TIMEOUT_SECONDS", 30),
+        image_allow_textless=_get_bool("RHA_IMAGE_ALLOW_TEXTLESS", False),
+        image_vlm_enabled=_get_bool("RHA_IMAGE_VLM_ENABLED", False),
+        image_vlm_timeout_seconds=_get_int("RHA_IMAGE_VLM_TIMEOUT_SECONDS", 45),
+        image_vlm=image_vlm,
         es_url=os.getenv("RHA_ES_URL", "http://127.0.0.1:9200").strip(),
         es_username=os.getenv("RHA_ES_USERNAME", "").strip(),
         es_password=os.getenv("RHA_ES_PASSWORD", "").strip(),

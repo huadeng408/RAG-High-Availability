@@ -20,5 +20,24 @@ func EnsureRuntimeSchema() error {
 		}
 	}
 
+	return ensureImageMetadataColumns()
+}
+
+func ensureImageMetadataColumns() error {
+	columns := []struct {
+		table string
+		name  string
+	}{
+		{table: "document_vectors", name: "image_metadata"},
+		{table: "evidence_units", name: "image_metadata"},
+	}
+	for _, column := range columns {
+		if !DB.Migrator().HasTable(column.table) || DB.Migrator().HasColumn(column.table, column.name) {
+			continue
+		}
+		if err := DB.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s JSON NULL", column.table, column.name)).Error; err != nil {
+			return fmt.Errorf("add %s.%s: %w", column.table, column.name, err)
+		}
+	}
 	return nil
 }

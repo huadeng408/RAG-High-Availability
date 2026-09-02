@@ -1,0 +1,11 @@
+{
+  "engine": "rha-e2e-ocr-stub",
+  "version": "1",
+  "regions": [
+    {
+      "text": "RHA image inspection code is IMG-2048.",
+      "bbox": [24, 30, 280, 78],
+      "confidence": 0.99
+    }
+  ]
+}

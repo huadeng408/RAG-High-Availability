@@ -42,3 +42,19 @@ func TestCitationsFromDocumentKeepsEachEvidenceID(t *testing.T) {
 		t.Fatalf("lost evidence locations: %#v", citations)
 	}
 }
+
+func TestCitationFromDocumentKeepsImageMetadata(t *testing.T) {
+	hit := model.EsDocument{
+		DocumentVersion: "v-image",
+		Modality:        "image",
+		EvidenceIDs:     []string{"image-evidence"},
+		BBox:            &model.BoundingBox{X0: 1, Y0: 2, X1: 20, Y1: 12},
+		Image:           &model.ImageMetadata{AssetSHA256: "asset-sha", MIMEType: "image/png", Width: 64, Height: 32},
+		TextContent:     "valve A17",
+	}
+
+	citation := CitationFromDocument(hit)
+	if citation.Image == nil || citation.Image.AssetSHA256 != "asset-sha" || citation.Image.Width != 64 {
+		t.Fatalf("lost image citation metadata: %#v", citation)
+	}
+}
