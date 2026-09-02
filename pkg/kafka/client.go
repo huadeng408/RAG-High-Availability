@@ -263,14 +263,10 @@ func consumeStage(cfg config.KafkaConfig, tracker repository.PipelineTaskReposit
 		KeepAlive: 30 * time.Second,
 	}
 
-	r := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:  brokers,
-		Topic:    topic,
-		GroupID:  groupID,
-		MinBytes: 10e3,
-		MaxBytes: 10e6,
-		Dialer:   dialer,
-	})
+	readerConfig := consumerReaderConfig(cfg, topic, groupID)
+	readerConfig.Brokers = brokers
+	readerConfig.Dialer = dialer
+	r := kafka.NewReader(readerConfig)
 	defer func() {
 		if err := r.Close(); err != nil {
 			log.Errorf("关闭 Kafka 消费者失败, stage=%s err=%v", stage, err)
@@ -302,7 +298,7 @@ func consumeStage(cfg config.KafkaConfig, tracker repository.PipelineTaskReposit
 			documentVersion = "upload:" + task.FileMD5
 		}
 		windowID := pipelineWindowID(task)
-		previous, getErr := tracker.GetOrStart(documentVersion, string(task.Stage), windowID)
+		previous, getErr := tracker.GetOrStart(task.FileMD5, documentVersion, string(task.Stage), windowID)
 		if getErr == nil && previous.Status == model.PipelineStatusSuccess {
 			_ = r.CommitMessages(context.Background(), m)
 			continue
@@ -313,14 +309,14 @@ func consumeStage(cfg config.KafkaConfig, tracker repository.PipelineTaskReposit
 			continue
 		}
 
-		if _, err := tracker.MarkProcessingByKey(documentVersion, string(task.Stage), windowID); err != nil {
+		if _, err := tracker.MarkProcessingByKey(task.FileMD5, documentVersion, string(task.Stage), windowID); err != nil {
 			log.Errorf("标记任务处理中失败, stage=%s file=%s err=%v", stage, task.FileMD5, err)
 			time.Sleep(time.Second)
 			continue
 		}
 
 		if err := processor.Process(context.Background(), task); err != nil {
-			retryCount, markErr := tracker.MarkRetryByKey(documentVersion, string(task.Stage), windowID, err.Error())
+			retryCount, markErr := tracker.MarkRetryByKey(task.FileMD5, documentVersion, string(task.Stage), windowID, err.Error())
 			if markErr != nil {
 				log.Errorf("标记任务重试失败, stage=%s file=%s err=%v", stage, task.FileMD5, markErr)
 			}
@@ -334,7 +330,7 @@ func consumeStage(cfg config.KafkaConfig, tracker repository.PipelineTaskReposit
 				}
 			} else {
 				task.LastError = err.Error()
-				_ = tracker.MarkFailedByKey(documentVersion, string(task.Stage), windowID, err.Error())
+				_ = tracker.MarkFailedByKey(task.FileMD5, documentVersion, string(task.Stage), windowID, err.Error())
 				if dlqErr := ProduceTaskToDLQ(task); dlqErr != nil {
 					log.Errorf("写入 DLQ 失败, stage=%s file=%s err=%v", stage, task.FileMD5, dlqErr)
 				} else {
@@ -345,12 +341,22 @@ func consumeStage(cfg config.KafkaConfig, tracker repository.PipelineTaskReposit
 			continue
 		}
 
-		if err := tracker.MarkSuccessByKey(documentVersion, string(task.Stage), windowID); err != nil {
+		if err := tracker.MarkSuccessByKey(task.FileMD5, documentVersion, string(task.Stage), windowID); err != nil {
 			log.Errorf("标记任务成功失败, stage=%s file=%s err=%v", stage, task.FileMD5, err)
 		}
 		if err := r.CommitMessages(context.Background(), m); err != nil {
 			log.Errorf("提交 Kafka offset 失败, stage=%s offset=%d err=%v", stage, m.Offset, err)
 		}
+	}
+}
+
+// consumerReaderConfig keeps low-volume tasks flowing instead of waiting for a batch-sized fetch.
+func consumerReaderConfig(_ config.KafkaConfig, topic, groupID string) kafka.ReaderConfig {
+	return kafka.ReaderConfig{
+		Topic:    topic,
+		GroupID:  groupID,
+		MinBytes: 1,
+		MaxBytes: 10e6,
 	}
 }
 

@@ -2,9 +2,12 @@
 package repository
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"github.com/huadeng408/RAG-High-Availability/internal/model"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -13,11 +16,11 @@ import (
 
 // PipelineTaskRepository defines persistence operations for pipeline task data.
 type PipelineTaskRepository interface {
-	GetOrStart(documentVersion, stage, windowID string) (*model.PipelineTask, error)
-	MarkProcessingByKey(documentVersion, stage, windowID string) (*model.PipelineTask, error)
-	MarkSuccessByKey(documentVersion, stage, windowID string) error
-	MarkRetryByKey(documentVersion, stage, windowID, lastError string) (int, error)
-	MarkFailedByKey(documentVersion, stage, windowID, lastError string) error
+	GetOrStart(fileMD5, documentVersion, stage, windowID string) (*model.PipelineTask, error)
+	MarkProcessingByKey(fileMD5, documentVersion, stage, windowID string) (*model.PipelineTask, error)
+	MarkSuccessByKey(fileMD5, documentVersion, stage, windowID string) error
+	MarkRetryByKey(fileMD5, documentVersion, stage, windowID, lastError string) (int, error)
+	MarkFailedByKey(fileMD5, documentVersion, stage, windowID, lastError string) error
 	GetByKey(fileMD5, stage string, chunkID int) (*model.PipelineTask, error)
 	MarkProcessing(fileMD5, stage string, chunkID int) (*model.PipelineTask, error)
 	MarkSuccess(fileMD5, stage string, chunkID int) error
@@ -43,8 +46,10 @@ func buildPipelineKey(fileMD5, stage string, chunkID int) string {
 }
 
 // GetOrStart atomically creates or loads one versioned pipeline task.
-func (r *pipelineTaskRepository) GetOrStart(documentVersion, stage, windowID string) (*model.PipelineTask, error) {
+func (r *pipelineTaskRepository) GetOrStart(fileMD5, documentVersion, stage, windowID string) (*model.PipelineTask, error) {
+	fileMD5 = normalizePipelineFileMD5(fileMD5, documentVersion)
 	task := &model.PipelineTask{
+		FileMD5:         fileMD5,
 		DocumentVersion: documentVersion,
 		Stage:           stage,
 		WindowID:        windowID,
@@ -68,8 +73,24 @@ func (r *pipelineTaskRepository) GetOrStart(documentVersion, stage, windowID str
 	return task, nil
 }
 
-func (r *pipelineTaskRepository) MarkProcessingByKey(documentVersion, stage, windowID string) (*model.PipelineTask, error) {
-	task, err := r.GetOrStart(documentVersion, stage, windowID)
+// pipelineTaskFileMD5 fills the legacy file identity column for versioned tasks.
+// Upload versions already carry the real MD5; other version formats get a stable surrogate.
+func normalizePipelineFileMD5(fileMD5, documentVersion string) string {
+	if value := strings.TrimSpace(fileMD5); value != "" {
+		return value
+	}
+	if strings.HasPrefix(documentVersion, "upload:") {
+		candidate := strings.TrimPrefix(documentVersion, "upload:")
+		if len(candidate) == 32 {
+			return candidate
+		}
+	}
+	digest := md5.Sum([]byte(documentVersion))
+	return hex.EncodeToString(digest[:])
+}
+
+func (r *pipelineTaskRepository) MarkProcessingByKey(fileMD5, documentVersion, stage, windowID string) (*model.PipelineTask, error) {
+	task, err := r.GetOrStart(fileMD5, documentVersion, stage, windowID)
 	if err != nil {
 		return nil, err
 	}
@@ -77,8 +98,8 @@ func (r *pipelineTaskRepository) MarkProcessingByKey(documentVersion, stage, win
 	return task, r.db.Save(task).Error
 }
 
-func (r *pipelineTaskRepository) MarkSuccessByKey(documentVersion, stage, windowID string) error {
-	task, err := r.MarkProcessingByKey(documentVersion, stage, windowID)
+func (r *pipelineTaskRepository) MarkSuccessByKey(fileMD5, documentVersion, stage, windowID string) error {
+	task, err := r.MarkProcessingByKey(fileMD5, documentVersion, stage, windowID)
 	if err != nil {
 		return err
 	}
@@ -88,8 +109,8 @@ func (r *pipelineTaskRepository) MarkSuccessByKey(documentVersion, stage, window
 	return r.db.Save(task).Error
 }
 
-func (r *pipelineTaskRepository) MarkRetryByKey(documentVersion, stage, windowID, lastError string) (int, error) {
-	task, err := r.MarkProcessingByKey(documentVersion, stage, windowID)
+func (r *pipelineTaskRepository) MarkRetryByKey(fileMD5, documentVersion, stage, windowID, lastError string) (int, error) {
+	task, err := r.MarkProcessingByKey(fileMD5, documentVersion, stage, windowID)
 	if err != nil {
 		return 0, err
 	}
@@ -101,8 +122,8 @@ func (r *pipelineTaskRepository) MarkRetryByKey(documentVersion, stage, windowID
 	return task.RetryCount, r.db.Save(task).Error
 }
 
-func (r *pipelineTaskRepository) MarkFailedByKey(documentVersion, stage, windowID, lastError string) error {
-	task, err := r.MarkProcessingByKey(documentVersion, stage, windowID)
+func (r *pipelineTaskRepository) MarkFailedByKey(fileMD5, documentVersion, stage, windowID, lastError string) error {
+	task, err := r.MarkProcessingByKey(fileMD5, documentVersion, stage, windowID)
 	if err != nil {
 		return err
 	}

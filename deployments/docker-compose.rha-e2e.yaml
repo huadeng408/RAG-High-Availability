@@ -6,8 +6,9 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: "${RHA_E2E_PASSWORD:?RHA_E2E_PASSWORD is required}"
       MYSQL_DATABASE: RHA
+    tmpfs:
+      - /var/lib/mysql
     volumes:
-      - rha-e2e-mysql:/var/lib/mysql
       - ../docs/ddl.sql:/docker-entrypoint-initdb.d/001-ddl.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h localhost -p$${MYSQL_ROOT_PASSWORD}"]
@@ -73,13 +74,14 @@ services:
 
   es:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.10.4
+    ports: ["9200:9200"]
     environment:
       discovery.type: single-node
       xpack.security.enabled: "false"
       xpack.security.enrollment.enabled: "false"
       ES_JAVA_OPTS: -Xms512m -Xmx512m
-    volumes:
-      - rha-e2e-es:/usr/share/elasticsearch/data
+    tmpfs:
+      - /usr/share/elasticsearch/data
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health >/dev/null"]
       interval: 10s
@@ -101,7 +103,7 @@ services:
       RHA_PORT: "8090"
       RHA_GO_BASE_URL: http://go:8080
       RHA_INTERNAL_TOKEN: "${RHA_E2E_INTERNAL_TOKEN:?RHA_E2E_INTERNAL_TOKEN is required}"
-      RHA_INGESTION_MODE: fixture
+      RHA_INGESTION_MODE: production
       RHA_LLM_BASE_URL: http://model-stub:8010/v1
       RHA_LLM_API_KEY: not-needed
       RHA_LLM_MODEL: rha-fixture-chat
@@ -140,6 +142,4 @@ services:
       retries: 30
 
 volumes:
-  rha-e2e-mysql:
   rha-e2e-minio:
-  rha-e2e-es:

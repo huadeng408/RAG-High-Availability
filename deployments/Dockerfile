@@ -10,8 +10,10 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
-# 复制所有源代码
-COPY . .
+# 只复制 Go 构建所需源码，避免把本地配置、虚拟环境或运行产物带入镜像。
+COPY cmd ./cmd
+COPY internal ./internal
+COPY pkg ./pkg
 
 # 编译应用
 # CGO_ENABLED=0 禁用了 CGO，使得编译出的二进制文件是静态链接的，不依赖于任何 C 库
@@ -31,7 +33,7 @@ COPY --from=builder /app/server /app/server
 # 复制配置文件
 # 注意：docker-compose 中需要将本地的 configs 目录挂载到容器中
 # 这里复制一份是为了在没有挂载的情况下也能提供默认配置
-COPY configs /app/configs
+COPY configs/config.yaml /app/configs/config.yaml
 
 # 暴露应用端口
 EXPOSE 8080

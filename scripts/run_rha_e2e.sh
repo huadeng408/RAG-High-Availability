@@ -38,25 +38,31 @@ for _ in $(seq 1 60); do
 done
 curl -fsS http://127.0.0.1:8080/healthz >/dev/null
 
-# Fixture mode keeps this acceptance run deterministic; the report mirrors the
-# evidence contract returned by the real parse/index/search path.
-python3 - "$ROOT_DIR" "$REPORT_PATH" <<'PY'
-import hashlib
-import json
-import pathlib
-import sys
+PYTHON_BIN="${RHA_E2E_PYTHON:-}"
+if [[ -z "$PYTHON_BIN" ]]; then
+  for candidate in python3 python python.exe; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import websocket' >/dev/null 2>&1; then
+      PYTHON_BIN="$candidate"
+      break
+    fi
+  done
+fi
+if [[ -z "$PYTHON_BIN" ]]; then
+  echo "RHA runtime E2E requires Python with websocket-client; install scripts/requirements-e2e.txt." >&2
+  exit 2
+fi
 
-root = pathlib.Path(sys.argv[1])
-out = pathlib.Path(sys.argv[2])
-fixture = json.loads((root / "testdata/rha_multimodal_fixture.json").read_text(encoding="utf-8"))
-pdf = next(item for item in fixture["documents"] if item["modality"] == "pdf")
-evidence = next(item for item in pdf["evidenceUnits"] if int(item.get("page", 0)) == 2)
-version = hashlib.sha256((pdf["sourceId"] + "\0" + "rha-e2e-fixture").encode()).hexdigest()[:32]
-report = {
-    "traceId": "rha-e2e-trace",
-    "pipeline": {"status": "SEARCHABLE", "documentVersion": version, "alias": "rha-knowledge-active"},
-    "answer": {"citations": [{"evidenceId": evidence["evidenceId"], "page": evidence["page"], "bbox": evidence.get("bbox"), "excerpt": evidence["text"]}]},
-}
-out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-PY
-python3 "$ROOT_DIR/scripts/verify_rha_e2e.py" --report "$REPORT_PATH"
+RUNNER_PATH="$ROOT_DIR/scripts/rha_runtime_e2e.py"
+VERIFY_PATH="$ROOT_DIR/scripts/verify_rha_e2e.py"
+REPORT_ARG="$REPORT_PATH"
+if [[ "$PYTHON_BIN" == *.exe ]] && command -v wslpath >/dev/null 2>&1; then
+  RUNNER_PATH="$(wslpath -w "$RUNNER_PATH")"
+  VERIFY_PATH="$(wslpath -w "$VERIFY_PATH")"
+  REPORT_ARG="$(wslpath -w "$REPORT_ARG")"
+fi
+
+"$PYTHON_BIN" "$RUNNER_PATH" \
+  --base-url http://127.0.0.1:8080 \
+  --elasticsearch-url http://127.0.0.1:9200 \
+  --out "$REPORT_ARG"
+"$PYTHON_BIN" "$VERIFY_PATH" --report "$REPORT_ARG"

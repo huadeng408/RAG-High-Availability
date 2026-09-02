@@ -155,7 +155,7 @@ func main() {
 		}
 		c.Next()
 	})
-	r.Use(middleware.RequestLogger(), gin.Recovery())
+	r.Use(middleware.TraceContext(), middleware.RequestLogger(), gin.Recovery())
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})

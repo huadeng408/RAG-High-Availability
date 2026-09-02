@@ -17,6 +17,8 @@
 /cmd/benchmark
 /configs/config.benchmark.yaml
 /configs/config.docker-agent-test.yaml
+/configs/config.e2e.yaml
+/deployments/docker-compose.e2e-ports.yaml
 /deployments/server-linux
 /server.exe
 /docs/benchmark-guide.md
