@@ -29,15 +29,6 @@ if ! docker info >/dev/null 2>&1; then
   exit 2
 fi
 
-docker compose -p "$PROJECT" -f "$COMPOSE_FILE" up -d --build
-for _ in $(seq 1 60); do
-  if curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
-    break
-  fi
-  sleep 3
-done
-curl -fsS http://127.0.0.1:8080/healthz >/dev/null
-
 PYTHON_BIN="${RHA_E2E_PYTHON:-}"
 if [[ -z "$PYTHON_BIN" ]]; then
   for candidate in python3 python python.exe; do
@@ -60,6 +51,15 @@ if [[ "$PYTHON_BIN" == *.exe ]] && command -v wslpath >/dev/null 2>&1; then
   VERIFY_PATH="$(wslpath -w "$VERIFY_PATH")"
   REPORT_ARG="$(wslpath -w "$REPORT_ARG")"
 fi
+
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" up -d --build
+for _ in $(seq 1 60); do
+  if curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
+    break
+  fi
+  sleep 3
+done
+curl -fsS http://127.0.0.1:8080/healthz >/dev/null
 
 "$PYTHON_BIN" "$RUNNER_PATH" \
   --base-url http://127.0.0.1:8080 \
