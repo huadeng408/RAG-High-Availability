@@ -1,6 +1,7 @@
 package kafka
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/huadeng408/RAG-High-Availability/pkg/tasks"
+	segmentkafka "github.com/segmentio/kafka-go"
 )
 
 const maxRetryBackoff = 5 * time.Second
@@ -22,6 +24,51 @@ type deadLetterLookup interface {
 }
 
 type taskPublisher func(tasks.FileProcessingTask) error
+
+// retryUntilDurable retries one operation without allowing the caller to advance
+// to a later Kafka message until the current operation succeeds or the context ends.
+func retryUntilDurable(ctx context.Context, interval time.Duration, operation func() error) error {
+	if interval <= 0 {
+		interval = time.Second
+	}
+	for {
+		if err := operation(); err == nil {
+			return nil
+		} else if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(interval):
+		}
+	}
+}
+
+// consumeMessagesSerially preserves a per-partition barrier: a later message is
+// not fetched while the current message is still waiting for durable handling.
+func consumeMessagesSerially(
+	ctx context.Context,
+	fetch func(context.Context) (segmentkafka.Message, error),
+	process func(context.Context, segmentkafka.Message) error,
+	interval time.Duration,
+) error {
+	for {
+		message, err := fetch(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if !waitForConsumerRetry(ctx, interval) {
+				return ctx.Err()
+			}
+			continue
+		}
+		if err := retryUntilDurable(ctx, interval, func() error { return process(ctx, message) }); err != nil {
+			return err
+		}
+	}
+}
 
 func retryDelay(base time.Duration, retryCount int) time.Duration {
 	if base <= 0 {

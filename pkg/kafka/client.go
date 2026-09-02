@@ -280,6 +280,10 @@ func StartPipelineConsumers(cfg config.KafkaConfig, processor TaskProcessor, tra
 
 // consumeStage handles consume stage.
 func consumeStage(cfg config.KafkaConfig, tracker repository.PipelineTaskRepository, processor TaskProcessor, stage tasks.Stage, topic, groupID string) {
+	consumeStageContext(context.Background(), cfg, tracker, processor, stage, topic, groupID)
+}
+
+func consumeStageContext(ctx context.Context, cfg config.KafkaConfig, tracker repository.PipelineTaskRepository, processor TaskProcessor, stage tasks.Stage, topic, groupID string) {
 	brokers := parseKafkaBrokers(cfg.Brokers)
 	dialer := &kafka.Dialer{
 		Timeout:   10 * time.Second,
@@ -298,113 +302,149 @@ func consumeStage(cfg config.KafkaConfig, tracker repository.PipelineTaskReposit
 	}()
 
 	log.Infof("Kafka 消费者启动, stage=%s topic=%s group=%s", stage, topic, groupID)
+	if err := consumeMessagesSerially(
+		ctx,
+		func(fetchCtx context.Context) (kafka.Message, error) {
+			return r.FetchMessage(fetchCtx)
+		},
+		func(processCtx context.Context, message kafka.Message) error {
+			return processStageMessage(processCtx, cfg, r, tracker, processor, stage, topic, message)
+		},
+		consumerRetryInterval(cfg),
+	); err != nil && ctx.Err() == nil {
+		log.Errorf("Kafka 消费者停止, stage=%s err=%v", stage, err)
+	}
+}
 
-	for {
-		m, err := r.FetchMessage(context.Background())
+func processStageMessage(ctx context.Context, cfg config.KafkaConfig, r *kafka.Reader, tracker repository.PipelineTaskRepository, processor TaskProcessor, stage tasks.Stage, topic string, m kafka.Message) error {
+	var task tasks.FileProcessingTask
+	if err := json.Unmarshal(m.Value, &task); err != nil {
+		log.Errorf("无法解析 Kafka 消息, stage=%s offset=%d err=%v", stage, m.Offset, err)
+		published := false
+		return retryUntilDurable(ctx, consumerRetryInterval(cfg), func() error {
+			if !published {
+				if err := ProduceRawToDLQ(m.Value); err != nil {
+					return err
+				}
+				published = true
+			}
+			return r.CommitMessages(ctx, m)
+		})
+	}
+	if task.Stage == "" {
+		task.Stage = stage
+	}
+
+	documentVersion := strings.TrimSpace(task.DocumentVersion)
+	if documentVersion == "" {
+		documentVersion = "upload:" + task.FileMD5
+	}
+	windowID := pipelineWindowID(task)
+	previous, getErr := tracker.GetOrStart(task.FileMD5, documentVersion, string(task.Stage), windowID)
+	if getErr != nil {
+		log.Errorf("读取任务状态失败, stage=%s file=%s err=%v", stage, task.FileMD5, getErr)
+		var err error
+		previous, err = retryGetOrStart(ctx, consumerRetryInterval(cfg), tracker, task.FileMD5, documentVersion, string(task.Stage), windowID)
 		if err != nil {
-			log.Errorf("从 Kafka 读取消息失败, stage=%s err=%v", stage, err)
-			time.Sleep(2 * time.Second)
-			continue
+			return err
+		}
+	}
+	if previous.Status == model.PipelineStatusSuccess {
+		return retryUntilDurable(ctx, consumerRetryInterval(cfg), func() error { return r.CommitMessages(ctx, m) })
+	}
+
+	if _, err := retryMarkProcessing(ctx, consumerRetryInterval(cfg), tracker, task.FileMD5, documentVersion, string(task.Stage), windowID); err != nil {
+		log.Errorf("标记任务处理中失败, stage=%s file=%s err=%v", stage, task.FileMD5, err)
+		return err
+	}
+
+	if err := processor.Process(ctx, task); err != nil {
+		var retryCount int
+		for {
+			var markErr error
+			retryCount, markErr = tracker.MarkRetryByKey(task.FileMD5, documentVersion, string(task.Stage), windowID, err.Error())
+			if markErr == nil {
+				break
+			}
+			log.Errorf("标记任务重试失败, stage=%s file=%s err=%v", stage, task.FileMD5, markErr)
+			if !waitForConsumerRetry(ctx, retryDelay(time.Duration(cfg.BaseBackoffMs)*time.Millisecond, 1)) {
+				return ctx.Err()
+			}
 		}
 
-		var task tasks.FileProcessingTask
-		if err := json.Unmarshal(m.Value, &task); err != nil {
-			log.Errorf("无法解析 Kafka 消息, stage=%s offset=%d err=%v", stage, m.Offset, err)
-			if handoffErr := handleMalformedMessage(
-				m.Value,
-				func(payload []byte) error { return ProduceRawToDLQ(payload) },
-				func() error { return r.CommitMessages(context.Background(), m) },
-			); handoffErr != nil {
-				log.Errorf("Malformed Kafka 消息交接失败, stage=%s offset=%d err=%v", stage, m.Offset, handoffErr)
-				time.Sleep(time.Second)
+		backoff := retryDelay(time.Duration(cfg.BaseBackoffMs)*time.Millisecond, retryCount)
+		if retryCount <= cfg.MaxRetries && !waitForConsumerRetry(ctx, backoff) {
+			return ctx.Err()
+		}
+		for {
+			handoffErr := handoffFailedTask(
+				tracker,
+				task,
+				documentVersion,
+				windowID,
+				retryCount,
+				cfg.MaxRetries,
+				err,
+				func(retryTask tasks.FileProcessingTask) error { return produceToTopic(ctx, topic, retryTask) },
+				func(dlqTask tasks.FileProcessingTask) error { return produceToTopic(ctx, topics.dlq, dlqTask) },
+			)
+			if handoffErr == nil {
+				break
 			}
-			continue
+			log.Errorf("任务失败交接未完成, stage=%s file=%s backoff=%s err=%v", stage, task.FileMD5, backoff, handoffErr)
+			if !waitForConsumerRetry(ctx, backoff) {
+				return ctx.Err()
+			}
 		}
-		if task.Stage == "" {
-			task.Stage = stage
+		if retryCount <= cfg.MaxRetries {
+			log.Warnf("任务处理失败, stage=%s file=%s retry=%d/%d backoff=%s err=%v", stage, task.FileMD5, retryCount, cfg.MaxRetries, backoff, err)
+		} else {
+			log.Errorf("任务进入 DLQ, stage=%s file=%s retry=%d", stage, task.FileMD5, retryCount)
 		}
+		return retryUntilDurable(ctx, consumerRetryInterval(cfg), func() error { return r.CommitMessages(ctx, m) })
+	}
 
-		documentVersion := strings.TrimSpace(task.DocumentVersion)
-		if documentVersion == "" {
-			documentVersion = "upload:" + task.FileMD5
-		}
-		windowID := pipelineWindowID(task)
-		previous, getErr := tracker.GetOrStart(task.FileMD5, documentVersion, string(task.Stage), windowID)
-		if getErr == nil && previous.Status == model.PipelineStatusSuccess {
-			_ = r.CommitMessages(context.Background(), m)
-			continue
-		}
-		if getErr != nil {
-			log.Errorf("读取任务状态失败, stage=%s file=%s err=%v", stage, task.FileMD5, getErr)
-			time.Sleep(time.Second)
-			continue
-		}
-
-		if _, err := tracker.MarkProcessingByKey(task.FileMD5, documentVersion, string(task.Stage), windowID); err != nil {
-			log.Errorf("标记任务处理中失败, stage=%s file=%s err=%v", stage, task.FileMD5, err)
-			time.Sleep(time.Second)
-			continue
-		}
-
-		if err := processor.Process(context.Background(), task); err != nil {
-			var retryCount int
-			for {
-				retryCount, getErr = tracker.MarkRetryByKey(
-					task.FileMD5, documentVersion, string(task.Stage), windowID, err.Error(),
-				)
-				if getErr == nil {
-					break
-				}
-				log.Errorf("标记任务重试失败, stage=%s file=%s err=%v", stage, task.FileMD5, getErr)
-				time.Sleep(retryDelay(time.Duration(cfg.BaseBackoffMs)*time.Millisecond, 1))
-			}
-
-			backoff := retryDelay(time.Duration(cfg.BaseBackoffMs)*time.Millisecond, retryCount)
-			if retryCount <= cfg.MaxRetries {
-				time.Sleep(backoff)
-			}
-			for {
-				handoffErr := handoffFailedTask(
-					tracker,
-					task,
-					documentVersion,
-					windowID,
-					retryCount,
-					cfg.MaxRetries,
-					err,
-					func(retryTask tasks.FileProcessingTask) error {
-						return produceToTopic(context.Background(), topic, retryTask)
-					},
-					ProduceTaskToDLQ,
-				)
-				if handoffErr == nil {
-					break
-				}
-				log.Errorf("任务失败交接未完成, stage=%s file=%s backoff=%s err=%v", stage, task.FileMD5, backoff, handoffErr)
-				time.Sleep(backoff)
-			}
-			if retryCount <= cfg.MaxRetries {
-				log.Warnf("任务处理失败, stage=%s file=%s retry=%d/%d backoff=%s err=%v", stage, task.FileMD5, retryCount, cfg.MaxRetries, backoff, err)
-			} else {
-				log.Errorf("任务进入 DLQ, stage=%s file=%s retry=%d", stage, task.FileMD5, retryCount)
-			}
-			if commitErr := r.CommitMessages(context.Background(), m); commitErr != nil {
-				log.Errorf("提交失败任务 Kafka offset 失败, stage=%s offset=%d err=%v", stage, m.Offset, commitErr)
-			}
-			continue
-		}
-
-		if err := handleSuccessfulMessage(
+	return retryUntilDurable(ctx, consumerRetryInterval(cfg), func() error {
+		return handleSuccessfulMessage(
 			func() error {
 				return tracker.MarkSuccessByKey(task.FileMD5, documentVersion, string(task.Stage), windowID)
 			},
-			func() error { return r.CommitMessages(context.Background(), m) },
-		); err != nil {
-			log.Errorf("标记任务成功或提交 Kafka offset 失败, stage=%s file=%s err=%v", stage, task.FileMD5, err)
-			time.Sleep(time.Second)
-			continue
-		}
+			func() error { return r.CommitMessages(ctx, m) },
+		)
+	})
+}
+
+func consumerRetryInterval(cfg config.KafkaConfig) time.Duration {
+	return retryDelay(time.Duration(cfg.BaseBackoffMs)*time.Millisecond, 1)
+}
+
+func waitForConsumerRetry(ctx context.Context, delay time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(delay):
+		return true
 	}
+}
+
+func retryGetOrStart(ctx context.Context, interval time.Duration, tracker repository.PipelineTaskRepository, fileMD5, documentVersion, stage, windowID string) (*model.PipelineTask, error) {
+	var task *model.PipelineTask
+	err := retryUntilDurable(ctx, interval, func() error {
+		var err error
+		task, err = tracker.GetOrStart(fileMD5, documentVersion, stage, windowID)
+		return err
+	})
+	return task, err
+}
+
+func retryMarkProcessing(ctx context.Context, interval time.Duration, tracker repository.PipelineTaskRepository, fileMD5, documentVersion, stage, windowID string) (*model.PipelineTask, error) {
+	var task *model.PipelineTask
+	err := retryUntilDurable(ctx, interval, func() error {
+		var err error
+		task, err = tracker.MarkProcessingByKey(fileMD5, documentVersion, stage, windowID)
+		return err
+	})
+	return task, err
 }
 
 // consumerReaderConfig keeps low-volume tasks flowing instead of waiting for a batch-sized fetch.

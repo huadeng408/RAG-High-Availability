@@ -1,6 +1,7 @@
 package kafka
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/huadeng408/RAG-High-Availability/internal/config"
 	"github.com/huadeng408/RAG-High-Availability/pkg/tasks"
+	segmentkafka "github.com/segmentio/kafka-go"
 )
 
 type capturedDeadLetter struct {
@@ -234,5 +236,61 @@ func TestSuccessfulKafkaMessageDoesNotCommitWhenStatePersistenceFails(t *testing
 	})
 	if err == nil || committed {
 		t.Fatalf("err=%v committed=%v, want persistence error and no commit", err, committed)
+	}
+}
+
+func TestSerialConsumerDoesNotFetchNextPartitionMessageBeforeCurrentIsDurable(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	messages := []segmentkafka.Message{
+		{Partition: 0, Offset: 41, Value: []byte("n")},
+		{Partition: 0, Offset: 42, Value: []byte("n+1")},
+	}
+	fetchCount := 0
+	processed := make([]int64, 0, 2)
+	committed := make([]int64, 0, 2)
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	err := consumeMessagesSerially(
+		ctx,
+		func(context.Context) (segmentkafka.Message, error) {
+			fetchCount++
+			if fetchCount > len(messages) {
+				return segmentkafka.Message{}, context.Canceled
+			}
+			return messages[fetchCount-1], nil
+		},
+		func(ctx context.Context, message segmentkafka.Message) error {
+			processed = append(processed, message.Offset)
+			if message.Offset == 41 {
+				return handleSuccessfulMessage(
+					func() error { return errors.New("success persistence unavailable") },
+					func() error {
+						committed = append(committed, message.Offset)
+						return nil
+					},
+				)
+			}
+			committed = append(committed, message.Offset)
+			return nil
+		},
+		time.Millisecond,
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("consume err=%v, want context cancellation", err)
+	}
+	if fetchCount != 1 || len(processed) == 0 {
+		t.Fatalf("fetchCount=%d processed=%v, want only message N", fetchCount, processed)
+	}
+	for _, offset := range processed {
+		if offset != 41 {
+			t.Fatalf("processed later message offset=%d, all retries must remain at N", offset)
+		}
+	}
+	if len(committed) != 0 {
+		t.Fatalf("committed=%v, want no offset committed while durability fails", committed)
 	}
 }
