@@ -29,6 +29,15 @@
 /__pycache__
 **/__pycache__/
 /scripts/__pycache__
+/tmp/
+/output/
+/.playwright-cli/
+/frontend/.playwright-cli/
+/appendonly.aof
+/*.aof
+/readme.html
+*.log
+/logs/
 /scripts/build_local_search_benchmark.py
 /scripts/embedding_server.py
 /scripts/prepare_search_eval.py
