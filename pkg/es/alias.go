@@ -46,7 +46,7 @@ func createEvidenceIndexIfNotExists(indexName string) error {
 	if res.StatusCode != 404 {
 		return fmt.Errorf("unexpected status when checking evidence index existence: %d", res.StatusCode)
 	}
-	mapping := `{"mappings":{"properties":{"evidence_id":{"type":"keyword"},"document_version":{"type":"keyword"},"modality":{"type":"keyword"},"page_number":{"type":"integer"},"slide_number":{"type":"integer"},"sheet_name":{"type":"keyword"},"text_content":{"type":"text"},"bbox":{"type":"object"},"image":{"type":"object"},"owner_id":{"type":"keyword"},"org_tag":{"type":"keyword"},"is_public":{"type":"boolean"}}}}`
+	mapping := `{"mappings":{"properties":{"evidence_id":{"type":"keyword"},"file_md5":{"type":"keyword"},"document_version":{"type":"keyword"},"modality":{"type":"keyword"},"page_number":{"type":"integer"},"slide_number":{"type":"integer"},"sheet_name":{"type":"keyword"},"text_content":{"type":"text"},"bbox":{"type":"object"},"image":{"type":"object"},"owner_id":{"type":"keyword"},"org_tag":{"type":"keyword"},"is_public":{"type":"boolean"}}}}`
 	res, err = ESClient.Indices.Create(indexName, ESClient.Indices.Create.WithBody(strings.NewReader(mapping)))
 	if err != nil {
 		return err

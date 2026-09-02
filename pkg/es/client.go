@@ -22,6 +22,84 @@ import (
 	"github.com/elastic/go-elasticsearch/v8/esapi"
 )
 
+// EvidenceDocument is the searchable source-level evidence stored alongside
+// chunk vectors. Evidence IDs include the immutable document version and are
+// used as Elasticsearch document IDs for idempotent replay.
+type EvidenceDocument struct {
+	EvidenceID      string               `json:"evidence_id"`
+	FileMD5         string               `json:"file_md5"`
+	DocumentVersion string               `json:"document_version"`
+	Modality        string               `json:"modality"`
+	PageNumber      int                  `json:"page_number,omitempty"`
+	SlideNumber     int                  `json:"slide_number,omitempty"`
+	SheetName       string               `json:"sheet_name,omitempty"`
+	TextContent     string               `json:"text_content"`
+	BBox            *model.BoundingBox   `json:"bbox,omitempty"`
+	Image           *model.ImageMetadata `json:"image,omitempty"`
+	OwnerID         string               `json:"owner_id"`
+	OrgTag          string               `json:"org_tag"`
+	IsPublic        bool                 `json:"is_public"`
+}
+
+// BuildEvidenceDocuments maps persisted source evidence to its searchable form.
+func BuildEvidenceDocuments(fileMD5 string, ownerID uint, orgTag string, isPublic bool, evidence []model.EvidenceUnit) []EvidenceDocument {
+	docs := make([]EvidenceDocument, 0, len(evidence))
+	for _, unit := range evidence {
+		if strings.TrimSpace(unit.ID) == "" || strings.TrimSpace(unit.DocumentVersion) == "" {
+			continue
+		}
+		docs = append(docs, EvidenceDocument{
+			EvidenceID: unit.ID, FileMD5: fileMD5, DocumentVersion: unit.DocumentVersion,
+			Modality: unit.Modality, PageNumber: unit.Page, SlideNumber: unit.Slide,
+			SheetName: unit.Sheet, TextContent: unit.Text, BBox: unit.BBox, Image: unit.Image,
+			OwnerID: strconv.FormatUint(uint64(ownerID), 10), OrgTag: orgTag, IsPublic: isPublic,
+		})
+	}
+	return docs
+}
+
+// BulkIndexEvidenceDocuments writes source evidence with stable IDs so retries
+// and replay overwrite the same records instead of creating duplicates.
+func BulkIndexEvidenceDocuments(ctx context.Context, indexName string, docs []EvidenceDocument) error {
+	if len(docs) == 0 {
+		return nil
+	}
+	var buf bytes.Buffer
+	for _, doc := range docs {
+		meta, err := json.Marshal(map[string]any{"index": map[string]string{"_index": indexName, "_id": doc.EvidenceID}})
+		if err != nil {
+			return err
+		}
+		body, err := json.Marshal(doc)
+		if err != nil {
+			return err
+		}
+		buf.Write(meta)
+		buf.WriteByte('\n')
+		buf.Write(body)
+		buf.WriteByte('\n')
+	}
+	res, err := (esapi.BulkRequest{Index: indexName, Body: &buf, Refresh: "true"}).Do(ctx, ESClient)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.IsError() {
+		body, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("bulk evidence index failed: status=%s body=%s", res.Status(), strings.TrimSpace(string(body)))
+	}
+	var response struct {
+		Errors bool `json:"errors"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&response); err != nil {
+		return err
+	}
+	if response.Errors {
+		return errors.New("bulk evidence index completed with partial failures")
+	}
+	return nil
+}
+
 // ESClient stores the shared Elasticsearch client instance.
 var ESClient *elasticsearch.Client
 

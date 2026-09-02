@@ -430,6 +430,9 @@ func (p *Processor) processIndex(ctx context.Context, task tasks.FileProcessingT
 			return fmt.Errorf("index: bulk index failed batch_start=%d: %w", i, err)
 		}
 	}
+	if err := p.indexEvidence(ctx, task); err != nil {
+		return err
+	}
 
 	_ = database.RDB.Del(ctx, cacheKey).Err()
 	_ = storage.MinioClient.RemoveObject(ctx, p.minioCfg.BucketName, p.parsedObjectName(taskIdentity(task)), minio.RemoveObjectOptions{})
@@ -738,10 +741,33 @@ func (p *Processor) processIndexExternal(ctx context.Context, task tasks.FilePro
 	if _, err := p.ingestionClient.Index(ctx, task, p.esCfg.IndexName, docs); err != nil {
 		return fmt.Errorf("index: external worker failed: %w", err)
 	}
+	if err := p.indexEvidence(ctx, task); err != nil {
+		return err
+	}
 
 	_ = database.RDB.Del(ctx, cacheKey).Err()
 	_ = storage.MinioClient.RemoveObject(ctx, p.minioCfg.BucketName, p.parsedObjectName(task.DocumentVersion), minio.RemoveObjectOptions{})
 	log.Infof("[Processor][index] done file=%s docs=%d worker=external", task.FileMD5, len(docs))
+	return nil
+}
+
+// indexEvidence writes source-level evidence after knowledge chunks commit.
+// Stable evidence IDs make replay idempotent in Elasticsearch.
+func (p *Processor) indexEvidence(ctx context.Context, task tasks.FileProcessingTask) error {
+	if p.evidenceRepo == nil {
+		return nil
+	}
+	evidence, err := p.evidenceRepo.ListByVersion(taskIdentity(task))
+	if err != nil {
+		return fmt.Errorf("index: load evidence failed: %w", err)
+	}
+	docs := es.BuildEvidenceDocuments(task.FileMD5, task.UserID, task.OrgTag, task.IsPublic, evidence)
+	if len(docs) == 0 {
+		return nil
+	}
+	if err := es.BulkIndexEvidenceDocuments(ctx, es.EvidenceReadAlias, docs); err != nil {
+		return fmt.Errorf("index: bulk evidence index failed: %w", err)
+	}
 	return nil
 }
 

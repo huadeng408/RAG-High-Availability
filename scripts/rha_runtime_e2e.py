@@ -320,6 +320,11 @@ def build_minimal_png(width: int, height: int, marker: str = "") -> bytes:
     )
 
 
+def build_recovery_png(run_suffix: str) -> bytes:
+    """Build a recovery fixture whose content identity cannot match the image fixture."""
+    return build_minimal_png(320, 120, marker=run_suffix + "-recovery")
+
+
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8080")
@@ -562,7 +567,7 @@ def run_runtime(
         control_url = str(getattr(args, "model_stub_control_url", "http://127.0.0.1:8010"))
         set_model_embedding_failure(control_url, True, timeout_seconds=args.request_timeout)
         recovery_file = f"rha-recovery-{run_suffix}.png"
-        recovery_contents = build_minimal_png(320, 120, marker=run_suffix)
+        recovery_contents = build_recovery_png(run_suffix)
         try:
             recovery_upload, failed_pipeline = upload_and_wait(
                 recovery_file,

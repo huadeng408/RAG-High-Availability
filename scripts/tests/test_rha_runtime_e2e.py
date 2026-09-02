@@ -608,6 +608,14 @@ class RuntimeE2ETest(unittest.TestCase):
         runtime = load_runtime_module()
         self.assertNotEqual(runtime.build_minimal_png(320, 120, marker="run-a"), runtime.build_minimal_png(320, 120, marker="run-b"))
 
+    def test_recovery_fixture_identity_is_distinct_from_image_fixture(self) -> None:
+        runtime = load_runtime_module()
+        self.assertTrue(hasattr(runtime, "build_recovery_png"), "build_recovery_png is required")
+        self.assertNotEqual(
+            runtime.build_minimal_png(320, 120, marker="run-a"),
+            runtime.build_recovery_png("run-a"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
