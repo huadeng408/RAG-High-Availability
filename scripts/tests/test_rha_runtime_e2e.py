@@ -604,6 +604,10 @@ class RuntimeE2ETest(unittest.TestCase):
                 self.assertEqual(image.format, "PNG")
                 self.assertEqual(image.size, (320, 120))
 
+    def test_png_marker_changes_upload_identity_for_repeated_runs(self) -> None:
+        runtime = load_runtime_module()
+        self.assertNotEqual(runtime.build_minimal_png(320, 120, marker="run-a"), runtime.build_minimal_png(320, 120, marker="run-b"))
+
 
 if __name__ == "__main__":
     unittest.main()

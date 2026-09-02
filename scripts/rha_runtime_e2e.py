@@ -492,7 +492,7 @@ def run_runtime(
     image_query = "RHA image inspection code"
     image_upload, image_pipeline = upload_and_wait(
         f"rha-image-{run_suffix}.png",
-        build_minimal_png(320, 120),
+        build_minimal_png(320, 120, marker=run_suffix),
         "image/png",
     )
 
