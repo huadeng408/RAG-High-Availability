@@ -20,6 +20,29 @@ import (
 	"github.com/minio/minio-go/v7"
 )
 
+const PipelineStatusSearchable = "SEARCHABLE"
+
+var pipelineStages = []string{"parse", "chunk", "embed", "index"}
+
+// PipelineStageStatus is the aggregated status of one logical pipeline stage.
+type PipelineStageStatus struct {
+	Stage         string     `json:"stage"`
+	Status        string     `json:"status"`
+	AttemptCount  int        `json:"attemptCount"`
+	RetryCount    int        `json:"retryCount"`
+	LastError     string     `json:"lastError,omitempty"`
+	NextAttemptAt *time.Time `json:"nextAttemptAt,omitempty"`
+	UpdatedAt     time.Time  `json:"updatedAt"`
+}
+
+// PipelineStatus describes the version currently tracked by the ingestion pipeline.
+type PipelineStatus struct {
+	FileMD5         string                `json:"fileMd5"`
+	DocumentVersion string                `json:"documentVersion,omitempty"`
+	Status          string                `json:"status"`
+	Stages          []PipelineStageStatus `json:"stages"`
+}
+
 // FileUploadDTO is returned to the frontend with resolved organization tag names.
 type FileUploadDTO struct {
 	model.FileUpload
@@ -47,6 +70,7 @@ type DocumentService interface {
 	DeleteDocument(fileMD5 string, user *model.User) error
 	GenerateDownloadURL(fileName string, user *model.User) (*DownloadInfoDTO, error)
 	GetFilePreviewContent(fileName string, user *model.User) (*PreviewInfoDTO, error)
+	GetPipelineStatus(fileMD5 string, user *model.User) (*PipelineStatus, error)
 }
 
 // documentService implements document operations.
@@ -103,6 +127,136 @@ func (s *documentService) ListUploadedFiles(userID uint) ([]FileUploadDTO, error
 	}
 
 	return dtos, nil
+}
+
+// GetPipelineStatus returns durable stage state after checking file ownership.
+func (s *documentService) GetPipelineStatus(fileMD5 string, user *model.User) (*PipelineStatus, error) {
+	fileMD5 = strings.TrimSpace(fileMD5)
+	if fileMD5 == "" {
+		return nil, errors.New("file md5 cannot be empty")
+	}
+	if user == nil {
+		return nil, errors.New("user is required")
+	}
+	record, err := s.uploadRepo.GetFileUploadRecordByMD5(fileMD5)
+	if err != nil {
+		return nil, err
+	}
+	if record.UserID != user.ID && user.Role != "ADMIN" {
+		return nil, errors.New("permission denied")
+	}
+	lister, ok := s.pipelineTaskRepo.(interface {
+		ListByFileMD5(string) ([]model.PipelineTask, error)
+	})
+	if !ok {
+		return nil, errors.New("pipeline status is not supported")
+	}
+	tasks, err := lister.ListByFileMD5(fileMD5)
+	if err != nil {
+		return nil, err
+	}
+	status := AggregatePipelineStatus(fileMD5, tasks)
+	return &status, nil
+}
+
+// AggregatePipelineStatus combines per-window tasks for the newest document version.
+// A version is searchable only when every logical stage has succeeded.
+func AggregatePipelineStatus(fileMD5 string, tasks []model.PipelineTask) PipelineStatus {
+	status := PipelineStatus{FileMD5: fileMD5, Status: model.PipelineStatusPending, Stages: make([]PipelineStageStatus, 0, len(pipelineStages))}
+	version := latestPipelineVersion(tasks)
+	status.DocumentVersion = version
+	byStage := make(map[string][]model.PipelineTask, len(pipelineStages))
+	for _, task := range tasks {
+		if version == "" || task.DocumentVersion == version {
+			byStage[task.Stage] = append(byStage[task.Stage], task)
+		}
+	}
+
+	allSuccess := true
+	anyProcessing := false
+	anyFailed := false
+	for _, stage := range pipelineStages {
+		stageStatus := aggregatePipelineStage(stage, byStage[stage])
+		status.Stages = append(status.Stages, stageStatus)
+		switch stageStatus.Status {
+		case model.PipelineStatusSuccess:
+		case model.PipelineStatusProcessing:
+			allSuccess = false
+			anyProcessing = true
+		case model.PipelineStatusFailed:
+			allSuccess = false
+			anyFailed = true
+		default:
+			allSuccess = false
+		}
+	}
+	if allSuccess {
+		status.Status = PipelineStatusSearchable
+	} else if anyProcessing {
+		status.Status = model.PipelineStatusProcessing
+	} else if anyFailed {
+		status.Status = model.PipelineStatusFailed
+	}
+	return status
+}
+
+func latestPipelineVersion(tasks []model.PipelineTask) string {
+	var latest model.PipelineTask
+	for _, task := range tasks {
+		if strings.TrimSpace(task.DocumentVersion) == "" {
+			continue
+		}
+		if latest.DocumentVersion == "" || task.CreatedAt.After(latest.CreatedAt) ||
+			(task.CreatedAt.Equal(latest.CreatedAt) && task.DocumentVersion > latest.DocumentVersion) {
+			latest = task
+		}
+	}
+	return latest.DocumentVersion
+}
+
+func aggregatePipelineStage(stage string, tasks []model.PipelineTask) PipelineStageStatus {
+	result := PipelineStageStatus{Stage: stage, Status: model.PipelineStatusPending}
+	if len(tasks) == 0 {
+		return result
+	}
+	result.AttemptCount = len(tasks)
+	latest := tasks[0]
+	for _, task := range tasks {
+		if task.RetryCount > result.RetryCount {
+			result.RetryCount = task.RetryCount
+		}
+		if task.UpdatedAt.After(latest.UpdatedAt) {
+			latest = task
+		}
+	}
+	result.LastError = latest.LastError
+	result.NextAttemptAt = latest.NextAttemptAt
+	result.UpdatedAt = latest.UpdatedAt
+
+	anyProcessing := false
+	anyFailed := false
+	allSuccess := true
+	for _, task := range tasks {
+		switch task.Status {
+		case model.PipelineStatusProcessing:
+			anyProcessing = true
+			allSuccess = false
+		case model.PipelineStatusFailed:
+			anyFailed = true
+			allSuccess = false
+		case model.PipelineStatusSuccess:
+		default:
+			allSuccess = false
+		}
+	}
+	if anyProcessing {
+		result.Status = model.PipelineStatusProcessing
+	} else if anyFailed {
+		result.Status = model.PipelineStatusFailed
+	} else if allSuccess {
+		result.Status = model.PipelineStatusSuccess
+	}
+	return result
 }
 
 // DeleteDocument deletes a document and its derived search artifacts.

@@ -200,6 +200,7 @@ func main() {
 			dh := handler.NewDocumentHandler(documentService, userService)
 			documents.GET("/accessible", dh.ListAccessibleFiles)
 			documents.GET("/uploads", dh.ListUploadedFiles)
+			documents.GET("/pipeline-status", dh.GetPipelineStatus)
 			documents.DELETE("/:fileMd5", dh.DeleteDocument)
 			documents.GET("/download", dh.GenerateDownloadURL)
 			documents.GET("/preview", dh.PreviewFile)

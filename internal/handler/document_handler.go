@@ -3,11 +3,11 @@ package handler
 
 import (
 	"github.com/gin-gonic/gin"
-	"net/http"
 	"github.com/huadeng408/RAG-High-Availability/internal/model"
 	"github.com/huadeng408/RAG-High-Availability/internal/service"
 	"github.com/huadeng408/RAG-High-Availability/pkg/log"
 	"github.com/huadeng408/RAG-High-Availability/pkg/token"
+	"net/http"
 )
 
 // DocumentHandler 负责处理所有与文档管理相关的 API 请求。
@@ -64,6 +64,31 @@ func (h *DocumentHandler) ListUploadedFiles(c *gin.Context) {
 		"message": "获取用户上传文件列表成功",
 		"data":    files,
 	})
+}
+
+// GetPipelineStatus returns durable ingestion state for one file.
+func (h *DocumentHandler) GetPipelineStatus(c *gin.Context) {
+	fileMD5 := c.Query("fileMd5")
+	if fileMD5 == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少文件 MD5"})
+		return
+	}
+	user, err := h.getUserFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法获取用户信息"})
+		return
+	}
+	status, err := h.docService.GetPipelineStatus(fileMD5, user)
+	if err != nil {
+		if err.Error() == "permission denied" {
+			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+			return
+		}
+		log.Warnf("GetPipelineStatus: failed for file %s, err: %v", fileMD5, err)
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": http.StatusOK, "message": "success", "data": status})
 }
 
 // DeleteDocument 处理删除文档的请求。
