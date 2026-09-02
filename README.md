@@ -1,256 +1,44 @@
-# RHA RAG 智能知识引擎
+# RHA
 
-RHA 是一个面向企业知识场景的私有知识库与智能问答系统，覆盖文档上传、异步解析、混合检索、多轮问答、记忆管理与后台管理等完整能力。项目采用 Go 作为主要业务服务与基础设施接入层，结合 Python `ai-orchestrator` 提供基于 LangGraph / LangChain 的在线问答编排、记忆任务和文档处理能力，适合用于企业知识库、内部问答助手、技术文档检索、制度流程查询等场景。
+RHA 是面向企业私有知识场景的高可用多模态 RAG 平台。它将文档接入、结构化解析、异步入库、混合检索和 LangGraph 多轮问答组合成一条可观测的私有化链路，并通过权限过滤、可恢复任务和页面级证据引用，让回答更容易追溯和运营。
 
-## 系统架构图
-
-完整双语版架构说明见 [docs/project-architecture.md](docs/project-architecture.md)。
-
-```mermaid
-flowchart TB
-    subgraph Client["客户端与前端 / Client & Frontend"]
-        U["用户与前端 / Users & Frontend<br/>登录 Login · 文档管理 Document Management · 智能问答 Chat"]
-    end
-
-    subgraph Gateway["Go 接入层 / Go Gateway Layer"]
-        HTTP["HTTP API 接口 / HTTP API Endpoints<br/>REST 接口 · 文件上传 · 文档管理 · 管理后台"]
-        WS["WebSocket 聊天网关 / WebSocket Chat Gateway<br/>鉴权 Auth · 会话接入 Session Access · 流式转发 Stream Relay · 停止控制 Stop Control"]
-        AUTH["认证与鉴权 / Authentication & Authorization<br/>JWT 校验 · Token 黑名单 · 管理员权限"]
-    end
-
-    subgraph Biz["Go 业务服务层 / Go Business Services"]
-        USER["用户服务 / User Service<br/>注册 Register · 登录 Login · 个人信息 Profile · 主组织 Primary Org"]
-        ADMIN["管理后台服务 / Admin Service<br/>用户管理 User Admin · 标签管理 Tag Admin · 会话查看 Conversations · 任务重放 Replay"]
-        DOC["文档服务 / Document Service<br/>可访问文档 Accessible Files · 下载 Download · 预览 Preview · 删除 Delete"]
-        UP["上传服务 / Upload Service<br/>分片上传 Chunk Upload · 秒传 Fast Upload · 合并 Merge · 状态跟踪 Status"]
-        CHAT["聊天服务 / Chat Service<br/>问答入口 Chat Entry · WebSocket Completion"]
-        ORCHSUP["Orchestrator 支持服务 / Orchestrator Support Service<br/>会话加载 Session Load · Prompt Context · 检索 Search · 重排 Rerank · 持久化 Persist"]
-    end
-
-    subgraph Retrieval["检索与记忆治理 / Retrieval & Memory Governance"]
-        SEARCH["检索服务 / Search Service<br/>BM25 · Vector · Phrase Fallback · RRF · Rerank"]
-        PERM["权限过滤 / Permission Filter<br/>user_id · org_tag · is_public 前置过滤"]
-        MEM["记忆服务 / Memory Service<br/>Sensory · Working · Profile · Long-term Memory"]
-        SESSION["会话历史 / Session Memory<br/>当前会话 Current Conversation · Redis 历史窗口 Sliding Window"]
-        WORKING["工作记忆 / Working Memory<br/>summary · facts · entities 快照 Snapshot"]
-        PROFILE["用户画像 / Profile Memory<br/>primary_language · answer_style · current_project · role · deployment_env"]
-        LTM["长期记忆 / Long-term Memory<br/>should_store · importance · 双存储 Dual Storage"]
-        FUSE["上下文融合与统一重排 / Context Fusion & Unified Rerank<br/>知识 Knowledge + 记忆 Memory 跨源统一排序"]
-    end
-
-    subgraph Orchestrator["Python AI Orchestrator / Python AI Orchestrator"]
-        APIORCH["FastAPI 编排服务 / FastAPI Orchestrator Service<br/>/v1/chat/stream · /v1/memory/* · /v1/ingestion/*"]
-        LG["LangGraph 状态图 / LangGraph StateGraph<br/>在线问答主链路 Main QA Workflow"]
-        PLAN["查询规划 / Query Planning<br/>意图识别 Intent · 查询改写 Rewrite · 检索模式 Retrieval Mode"]
-        PROMPT["Prompt 组装 / Prompt Assembly<br/>规则 Rules · Memory Prelude · Context · History Window"]
-        GEN["答案生成 / Answer Generation<br/>流式输出 Streaming Tokens · Done 事件"]
-        RETK["知识检索器 / Knowledge Retriever<br/>GoKnowledgeRetriever · HybridKnowledgeRetriever"]
-        RETM["记忆检索器 / Memory Retriever<br/>GoMemoryRetriever"]
-        RERANK["上下文重排 / Context Rerank<br/>跨源片段 Mixed Context Rerank"]
-        MTASK["记忆任务 / Memory Tasks<br/>工作记忆摘要 Working Summary · 长期记忆抽取 Long-term Extraction"]
-        ING["文档处理 Worker / Ingestion Worker<br/>Parse · Chunk · Embed · Index"]
-    end
-
-    subgraph Pipeline["异步文档流水线 / Async Document Pipeline"]
-        KAFKA["Kafka 任务总线 / Kafka Task Bus<br/>parse · chunk · embed · index · dlq"]
-        PROC["Go Pipeline Processor / Go Pipeline Processor<br/>Stage 调度 Scheduling · 重试 Retry · 回放 Replay"]
-        PARSE["解析阶段 / Parse Stage<br/>正文抽取 Text Extraction"]
-        CHUNK["切分阶段 / Chunk Stage<br/>块切分 Chunking · 结构化片段 Structured Chunks"]
-        EMBED["向量化阶段 / Embed Stage<br/>批量向量生成 Batch Embeddings"]
-        INDEX["索引阶段 / Index Stage<br/>ES Bulk 写入 Bulk Indexing"]
-    end
-
-    subgraph Data["数据与基础设施 / Data & Infrastructure"]
-        MYSQL["MySQL / MySQL<br/>用户 Users · 文档元数据 File Metadata · Long-term Memory · Pipeline Task"]
-        REDIS["Redis / Redis<br/>上传进度 Upload Status · 当前会话 Current Conversation · 会话历史 Conversation History"]
-        MINIO["MinIO / MinIO<br/>分片对象 Chunks · 合并文件 Merged Files · 中间产物 Artifacts"]
-        ES["Elasticsearch / Elasticsearch<br/>知识索引 Knowledge Index · 记忆索引 Memory Index"]
-        TIKA["Tika / Tika<br/>多格式文档正文抽取 Multi-format Text Extraction"]
-        EMBSVC["Embedding 服务 / Embedding Service<br/>查询向量 Query Embeddings · 文档向量 Document Embeddings"]
-        RR["Reranker 服务 / Reranker Service<br/>Cross-Encoder 精排 Cross-Encoder Rerank"]
-        LLM["LLM 服务 / LLM Service<br/>Planner 模型 Planner Model · Answer 模型 Answer Model"]
-    end
-
-    U --> HTTP
-    U --> WS
-
-    HTTP --> AUTH
-    WS --> AUTH
-
-    AUTH --> USER
-    AUTH --> CHAT
-    HTTP --> UP
-    HTTP --> DOC
-    HTTP --> ADMIN
-
-    USER --> MYSQL
-    USER --> REDIS
-    ADMIN --> MYSQL
-    ADMIN --> REDIS
-    ADMIN --> KAFKA
-    DOC --> MYSQL
-    DOC --> MINIO
-    UP --> REDIS
-    UP --> MINIO
-    UP --> MYSQL
-    UP --> KAFKA
-
-    CHAT --> APIORCH
-    APIORCH --> LG
-    LG --> PLAN
-    LG --> PROMPT
-    LG --> GEN
-    LG --> RETK
-    LG --> RETM
-    LG --> RERANK
-    LG --> MTASK
-
-    PLAN --> LLM
-    PROMPT --> ORCHSUP
-    GEN --> LLM
-    GEN --> WS
-
-    RETK --> ORCHSUP
-    RETM --> ORCHSUP
-    RERANK --> ORCHSUP
-    MTASK --> LLM
-
-    ORCHSUP --> SESSION
-    ORCHSUP --> SEARCH
-    ORCHSUP --> MEM
-    ORCHSUP --> FUSE
-
-    SEARCH --> PERM
-    SEARCH --> ES
-    SEARCH --> EMBSVC
-    SEARCH --> RR
-
-    MEM --> SESSION
-    MEM --> WORKING
-    MEM --> PROFILE
-    MEM --> LTM
-    MEM --> ES
-    MEM --> MYSQL
-    MEM --> EMBSVC
-    MEM --> APIORCH
-
-    FUSE --> RR
-    FUSE --> ES
-
-    KAFKA --> PROC
-    PROC --> PARSE
-    PROC --> CHUNK
-    PROC --> EMBED
-    PROC --> INDEX
-    PROC --> ING
-
-    PARSE --> TIKA
-    PARSE --> MINIO
-    CHUNK --> ING
-    EMBED --> ING
-    EMBED --> EMBSVC
-    INDEX --> ING
-    INDEX --> ES
-
-    ING --> TIKA
-    ING --> EMBSVC
-    ING --> ES
-
-    SESSION --> REDIS
-    WORKING --> MYSQL
-    PROFILE --> MYSQL
-    LTM --> MYSQL
-    LTM --> ES
-```
-
-## 功能概览
-
-- 大文件分片上传、断点续传、秒传、失败重试与合并校验
-- PDF、Word、Excel、PPT、TXT、Markdown 等多种文档格式入库
-- 基于 Kafka 的 `parse -> chunk -> embed -> index` 异步处理流水线
-- BM25、向量检索、短语兜底、RRF 融合与 Cross-Encoder 精排
-- 基于 WebSocket 的流式回答输出与多轮追问
-- Session Memory、Sensory Memory、Working Memory、Profile Memory、Long-term Memory 五层记忆体系
-- 公开文档、私有文档、组织标签文档等多租户权限模型
-- 用户管理、组织标签管理、文档管理、会话查看与任务重放
-
-## 系统组成
-
-### Go API Service
-
-Go 服务负责业务接入和基础设施访问，是系统的主入口：
-
-- HTTP / WebSocket 接口
-- 用户、权限、文档、后台管理
-- MySQL / Redis / MinIO / Elasticsearch / Kafka 访问
-- 检索实现、权限过滤、记忆存储与会话管理
-- 对 Python orchestrator 暴露内部支持接口
-
-### Python AI Orchestrator
-
-`ai-orchestrator` 服务负责 AI 编排与部分智能任务：
-
-- LangGraph 在线问答主链路
-- LangChain Prompt、Retriever、Embeddings、Text Splitter 等组件抽象
-- 工作记忆摘要与长期记忆抽取
-- 文档 ingestion worker
-- 流式响应、trace、健康检查与烟测支持
-
-### 基础设施
-
-- MySQL 8
-- Redis 7
-- Kafka
-- MinIO
-- Elasticsearch 8
-- Apache Tika
-- LLM / Embedding / Reranker 服务
+适用场景包括企业制度与流程问答、技术文档助手、内部知识库检索，以及需要保留文档版本和访问边界的私有部署场景。
 
 ## 核心能力
 
-### 1. 文档上传与入库
+### 多模态文档解析
 
-- 5MB 级分片上传
-- Redis 记录上传状态与续传进度
-- MD5 校验、秒传、失败重试
-- MinIO 存储分片和合并文件
-- Kafka 异步触发文档处理任务
+RHA 为不同文档结构使用不同的切分和证据模型，解析结果携带 `documentVersion`、解析器版本、来源路径和可选位置字段：
 
-### 2. 异步文档处理流水线
+| 模态 | 结构化策略 | 引用定位 |
+| --- | --- | --- |
+| PDF | MinerU + OCR，按页和页面元素生成证据 | 页码、`bbox` |
+| Word | 按标题层级维护 `headingPath`，按段落生成证据 | 标题路径 |
+| PowerPoint | 按 Slide 提取文本 | Slide 编号 |
+| Excel | 按 Sheet 和表头读取，按行窗口切分 | Sheet、表头、行范围 |
+| TXT / Markdown | 按文本块切分 | 来源文件 |
 
-文档入库采用四段式异步流水线：
+生产 PDF 路由要求 MinerU 输出包含 OCR 确认和页面 `bbox` 的 JSON 回执；MinerU 不可用时会明确失败，不回退到 Tika。Word、PPT 和 Excel 使用 Python 结构化解析器，结构化片段和证据 ID 会一路传递到索引和问答引用。
 
-- `parse`：通过 Tika 提取正文文本
-- `chunk`：切分文本块并保留块级结构
-- `embed`：批量生成向量
-- `index`：写入 Elasticsearch 检索索引
+### 可恢复的文档入库
 
-当前支持两种执行方式：
+- 分片上传、断点续传、秒传、分片 MD5 校验和合并完整性校验
+- Redis 保存上传进度，MinIO 保存分片与合并对象
+- Kafka 四阶段流水线：`parse -> chunk -> embed -> index`
+- 每个阶段按文档版本和窗口建立可恢复任务，支持幂等处理、指数退避重试和 `file-dlq` 死信队列
+- 管理端可以按失败阶段回放任务；Elasticsearch 使用物理索引 + read alias 进行原子切换
 
-- Go 本地处理链路
-- Python ingestion worker 链路：基于 LangChain Text Splitter 与 Embeddings 执行处理逻辑
+### 混合检索与降级
 
-### 3. 混合检索与召回优化
+- BM25、向量 KNN 和短语召回并行执行
+- 使用 RRF 融合候选，按需调用 Cross-Encoder 重排
+- `user_id`、组织标签和 `is_public` 在 Elasticsearch 查询中过滤，避免无权限内容进入上下文
+- Embedding 或向量召回失败时继续使用 BM25；Reranker 超时或失败时返回融合结果并记录 `rerank_skipped`
+- 检索日志记录召回候选、重排状态、延迟和可选离线评测指标
 
-- BM25 关键词召回
-- 向量检索
-- Query Normalization
-- 短语兜底
-- RRF 融合
-- 可选 Cross-Encoder 精排
-- 权限过滤前置到检索层，避免无权限内容进入上下文
+### LangGraph 多轮问答与长期记忆
 
-### 4. 智能问答与多轮对话
-
-- WebSocket 流式输出
-- 意图识别、查询改写、追问判断
-- 检索增强生成
-- 感知记忆、工作记忆、长期记忆协同
-- 聊天历史与记忆结果持久化
-
-### 5. LangGraph / LangChain AI 编排
-
-在线问答主链路固定由 `ai-orchestrator` 承担，流程如下：
+Python `ai-orchestrator` 通过 11 个 LangGraph 节点编排在线问答：
 
 ```text
 load_history
@@ -266,208 +54,177 @@ load_history
 -> persist_memory
 ```
 
-其中：
+Go 负责鉴权、会话、检索、重排和持久化，Python 负责图编排、Prompt 组装、模型调用和记忆任务。问答通过 WebSocket 流式返回 token、trace 和完成事件，并支持会话历史、工作记忆、用户画像和长期记忆。
 
-- LangGraph 负责状态流转与节点编排
-- LangChain 负责 Prompt、Retriever、Embeddings、Text Splitter 等能力抽象
-- Go 服务负责内部会话、检索、重排、记忆存储和业务接口
+### 可追溯与可观测
 
-## 项目结构
+- Go 与 Python 的内部 HTTP 调用、聊天流和 Kafka 任务模型支持传播 `X-Trace-ID`
+- 文档流水线、检索、重排和生成等核心阶段保留 trace/span 边界
+- Go 和 Python 提供 OpenTelemetry span 边界与接入点，同时保留带 trace ID 的结构化日志；生产环境可按所用 collector 补充 SDK/exporter 配置
+- 完成事件中的引用包含 `evidenceId`、文档版本、来源路径以及页码、Slide、Sheet 或 `bbox` 等定位信息
 
-```text
-cmd/
-  server/                    Go 后端启动入口
+## 架构
 
-internal/
-  config/                    配置定义
-  handler/                   HTTP / WebSocket 接口层
-  middleware/                鉴权、日志与中间件
-  model/                     领域模型与 DTO
-  pipeline/                  文档异步处理逻辑
-  repository/                数据访问层
-  service/                   业务服务层
-
-pkg/
-  database/                  MySQL / Redis 初始化
-  embedding/                 Embedding 客户端
-  es/                        Elasticsearch 封装
-  kafka/                     Kafka producer / consumer
-  orchestrator/              Go <-> Python orchestrator / ingestion / memory client
-  reranker/                  Reranker 客户端
-  storage/                   MinIO 客户端
-  tasks/                     Kafka stage 任务模型
-  tika/                      Tika 客户端
-  token/                     JWT 管理
-
-ai-orchestrator/
-  app/                       LangGraph / LangChain 服务
-  requirements.txt           Python 依赖
-  .env.example               Python 服务环境变量示例
-
-frontend/
-  src/                       Vue 前端项目
-
-configs/
-  config.yaml                本地开发配置
-  config.docker-stack-run.yaml
-
-docs/
-  ddl.sql                    数据库初始化脚本
-  local-dev-runbook.md       本地开发说明
-
-scripts/
-  verify_langgraph_stack.py  双服务烟测脚本
+```mermaid
+flowchart LR
+    UI[Vue 前端] -->|HTTP / WebSocket| GO[Go + Gin API]
+    GO --> AUTH[JWT 与权限过滤]
+    GO --> UP[分片上传与文档服务]
+    UP --> OBJ[MinIO]
+    UP --> MQ[Kafka]
+    MQ --> PIPE[parse -> chunk -> embed -> index]
+    PIPE --> PY[Python ingestion worker]
+    PY --> ES[(Elasticsearch)]
+    GO -->|内部 HTTP + X-Trace-ID| ORCH[LangGraph orchestrator]
+    ORCH -->|检索 / 记忆 / 重排| GO
+    ORCH --> LLM[LLM]
+    GO --> MYSQL[(MySQL)]
+    GO --> REDIS[(Redis)]
 ```
 
 ## 技术栈
 
-- 后端：Go 1.23、Gin、GORM、Zap、JWT
-- AI 编排：Python、FastAPI、LangGraph、LangChain、LangChain OpenAI
-- 前端：Vue 3、TypeScript、Vite、Pinia、Vue Router、Naive UI、UnoCSS
-- 中间件与存储：MySQL、Redis、Kafka、MinIO、Elasticsearch
-- 模型服务：DeepSeek / Ollama、Embedding、Reranker、Apache Tika
+| 层次 | 组件 |
+| --- | --- |
+| API 与业务 | Go 1.23、Gin、GORM、JWT、WebSocket |
+| AI 编排 | Python、FastAPI、LangGraph、LangChain |
+| 数据与消息 | MySQL 8、Redis 7、Kafka、Elasticsearch 8、MinIO |
+| 模型服务 | OpenAI 兼容的 LLM / Embedding、Cross-Encoder Reranker |
+| 文档处理 | MinerU + OCR、Office Open XML 结构化解析 |
+| 前端 | Vue 3、TypeScript、Vite、Naive UI、Pinia |
+| 可观测性 | OpenTelemetry API 接入点、结构化日志、Trace ID 传播 |
 
-## 主要页面
+## 项目结构
 
-- 登录 / 注册
-- 知识库管理
-- 文档上传与文档检索
-- 智能问答聊天页
-- 聊天历史
-- 用户管理
-- 组织标签管理
-- 个人中心
+```text
+cmd/server/                 Go 服务入口
+internal/handler/           HTTP、WebSocket 和管理接口
+internal/service/           用户、文档、上传、检索、聊天和记忆服务
+internal/pipeline/          Kafka 文档流水线处理器
+internal/repository/        MySQL / Redis 数据访问
+pkg/kafka/                  Kafka producer、consumer、重试和 DLQ
+pkg/es/                     Elasticsearch 索引、检索和 alias
+pkg/orchestrator/           Go 与 Python 服务通信客户端
+pkg/observability/          Trace ID 和 span 边界
+ai-orchestrator/app/        LangGraph、检索器、记忆和结构化 ingestion
+frontend/                   Vue 管理端与聊天界面
+deployments/                Docker Compose、Embedding 和 Reranker 服务
+configs/                    Go 服务配置模板
+docs/                       DDL、架构说明和本地运行手册
+scripts/                    烟测、fixture 校验和基准脚本
+benchmarks/                 离线评测集与结果样例
+```
 
 ## 快速开始
 
-### 1. 启动基础依赖
+### 1. 启动基础设施
+
+需要 Docker Desktop、Go 1.23+、Python 3.11+、Node 18+ 和 pnpm 8+。
 
 ```bash
 docker compose -f deployments/docker-compose.yaml up -d
 ```
 
-默认包含：
+该 Compose 文件会启动 MySQL、Redis、MinIO、Kafka、Zookeeper、Elasticsearch、Tika、Embedding 和 Reranker。默认端口见 [docs/local-dev-runbook.md](docs/local-dev-runbook.md)。本地默认账号和密钥只用于开发，部署前请替换。
 
-- MySQL
-- Redis
-- MinIO
-- Elasticsearch
-- Kafka
-- Zookeeper
-- Apache Tika
-
-### 2. 配置 Go 服务
-
-编辑 [configs/config.yaml](configs/config.yaml)，填写或调整以下配置：
-
-- MySQL / Redis / MinIO
-- Elasticsearch
-- Kafka
-- Tika
-- Embedding 服务
-- LLM 服务
-- Reranker 服务
-- `ai.orchestrator` 相关配置
-
-### 3. 启动 Go 服务
+### 2. 初始化并启动 Go API
 
 ```bash
 go mod download
-go run cmd/server/main.go
+go run ./cmd/server
 ```
 
-默认地址：
-
-```text
-http://127.0.0.1:8081
-```
-
-健康检查：
+服务默认监听 `http://127.0.0.1:8081`，健康检查：
 
 ```text
 GET /healthz
 ```
 
-### 4. 启动 Python AI Orchestrator
+根据环境修改 [configs/config.yaml](configs/config.yaml)，特别是 MySQL、Redis、MinIO、Kafka、Elasticsearch、Embedding、Reranker 和 `ai.orchestrator` 配置。
+
+### 3. 启动 Python orchestrator
 
 ```powershell
 python -m venv ai-orchestrator\.venv
 ai-orchestrator\.venv\Scripts\python.exe -m pip install -r ai-orchestrator\requirements.txt
-```
-
-根据 [ai-orchestrator/.env.example](ai-orchestrator/.env.example) 配置环境变量后启动：
-
-```powershell
+$env:RHA_INTERNAL_TOKEN="replace-with-a-private-token"
+$env:RHA_GO_BASE_URL="http://127.0.0.1:8081"
+$env:RHA_LLM_API_KEY="replace-with-your-llm-key"
 ai-orchestrator\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir ai-orchestrator --host 0.0.0.0 --port 8090
 ```
 
-在线问答链路固定依赖 orchestrator，请在 [configs/config.yaml](configs/config.yaml) 中启用：
+在 Go 配置中启用：
 
 ```yaml
 ai:
   orchestrator:
     enabled: true
     ingestion_enabled: true
+    base_url: "http://127.0.0.1:8090"
 ```
 
-### 5. 启动前端
+完整变量说明见 [ai-orchestrator/.env.example](ai-orchestrator/.env.example) 和 [docs/local-dev-runbook.md](docs/local-dev-runbook.md)。
+
+### 4. 启动前端
 
 ```bash
 cd frontend
 pnpm install
-pnpm run dev
+pnpm dev
 ```
 
-## 典型链路
+开发地址通常为 `http://127.0.0.1:5173`。
 
-### 文档入库链路
+## 主要接口
 
-1. 用户上传文件
-2. Go 服务完成分片校验与文件合并
-3. 文件写入 MinIO
-4. Kafka 投递异步任务
-5. 解析、切分、向量化、索引分阶段执行
-6. 文档进入 Elasticsearch 检索体系
+登录后，业务 API 位于 `/api/v1`：
 
-### 智能问答链路
+| 领域 | 接口 |
+| --- | --- |
+| 认证 | `POST /users/login`、`POST /users/register` |
+| 上传 | `POST /upload/check`、`POST /upload/chunk`、`POST /upload/merge`、`GET /upload/status` |
+| 文档 | `GET /documents/accessible`、`GET /documents/preview`、`GET /documents/download` |
+| 检索 | `GET /search/hybrid` |
+| 对话 | `GET /chat/websocket-token`，再连接根路径 `GET /chat/:token` |
+| 管理 | `POST /admin/pipeline/replay`、用户/组织标签/会话管理接口 |
 
-1. 用户通过 WebSocket 提问
-2. Go 服务完成鉴权并转发给 AI Orchestrator
-3. LangGraph 执行查询规划、检索编排、上下文融合与答案生成
-4. 回答按 token 流式返回给前端
-5. 会话历史与记忆结果写回 Go 侧存储
+Go 与 Python 的内部接口使用 `X-Internal-Token`，不应直接暴露到公网。内部接口和 ingestion contract 见 [ai-orchestrator/README.md](ai-orchestrator/README.md)。
 
-## 权限模型
+## 验证与离线评测
 
-- 公共文档：所有用户可访问
-- 私有文档：仅所属用户或同组织标签用户可访问
-- 管理员：可管理用户、组织标签、文档，并查看全局会话数据
+运行 Go 与 Python 单元测试：
 
-## 配置建议
+```bash
+go test ./...
+PYTHONPATH=ai-orchestrator python -m unittest discover -s ai-orchestrator/tests -v
+```
 
-- 生产环境建议将数据库连接串、API Key、共享密钥改为环境变量或密钥管理服务注入
-- `ai.orchestrator.enabled` 用于启用 LangGraph 在线问答编排
-- `ai.orchestrator.ingestion_enabled` 用于启用 Python ingestion worker
-- `shared_secret` 用于 Go 与 Python 内部接口鉴权
+验证多模态结构化契约：
 
-## 联调与诊断
+```bash
+python scripts/verify_rha_fixture.py
+```
 
-项目内提供了一个双服务烟测脚本，用于检查 Go 服务、Python orchestrator、内部检索接口与 ingestion route 是否连通：
+验证 Go 网关、Python orchestrator、内部检索和 ingestion route 的联通性：
 
 ```bash
 python scripts/verify_langgraph_stack.py \
   --go-base-url http://127.0.0.1:8081 \
   --orchestrator-base-url http://127.0.0.1:8090 \
-  --internal-token rha-internal-dev \
+  --internal-token "$RHA_INTERNAL_TOKEN" \
   --user-id 1 \
   --username admin \
   --out benchmarks/results/langgraph-stack-smoke.json
 ```
 
-Go 与 Python 内部调用会携带 `X-Trace-ID`，便于在日志中关联一次完整请求链路。
+离线检索、RAG 流式和上传基准的命令与指标定义见 [docs/benchmark-guide.md](docs/benchmark-guide.md)。仓库中的历史上传样本 `benchmarks/results/upload-baguwen-benchmark.json` 记录了 120 份文档的上传成功率 100%，合并 P95 约 2.445 秒；这是上传/合并阶段数据，不代表后续解析、Embedding 和 Elasticsearch 可检索率。
 
-## 说明
+当前多模态契约 fixture 覆盖 PDF、Word、PPT、Excel 四种模态，共 8 个示例证据单元，用于验证字段和引用链路，不应解读为生产数据规模。
 
-- 在线问答链路固定走 LangGraph / LangChain orchestrator
-- Go 侧不再保留本地问答回退链路
-- 发布前请替换示例配置中的敏感信息
+## 设计文档
+
+- [项目架构](docs/project-architecture.md)
+- [本地运行手册](docs/local-dev-runbook.md)
+- [Kafka 流水线](docs/kafka.md)
+- [RHA E2E 运行手册](docs/rha-e2e-runbook.md)
+- [数据库 DDL](docs/ddl.sql)
