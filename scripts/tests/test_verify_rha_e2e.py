@@ -377,14 +377,47 @@ class VerifyRhaE2ETest(unittest.TestCase):
         report = reliability_report()
         outage = report["reliability"]["brokerOutage"]
         outage["retrieval"]["hits"][0]["citations"] = [
-            {"evidenceId": "broker-evidence", "documentVersion": "broker-version"},
-            {"evidenceId": "websocket-only", "documentVersion": "older-version"},
+            {"evidenceId": "broker-evidence", "documentVersion": "older-version"},
+            {"evidenceId": "current-retrieval", "documentVersion": "broker-version"},
         ]
-        outage["websocket"]["citations"] = [{"evidenceId": "websocket-only"}]
+        outage["websocket"]["citations"] = [{
+            "evidenceId": "broker-evidence",
+            "documentVersion": "broker-version",
+        }]
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "report.json"
             path.write_text(json.dumps(report), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "brokerOutage websocket citations"):
+                VERIFY_MODULE.verify(path)
+
+    def test_rejects_broker_citation_ids_that_are_not_non_empty_strings(self) -> None:
+        for source in ("retrieval", "websocket"):
+            for malformed_id in (123, True, "   "):
+                report = reliability_report()
+                outage = report["reliability"]["brokerOutage"]
+                if source == "retrieval":
+                    citation = outage["retrieval"]["hits"][0]["citations"][0]
+                else:
+                    citation = outage["websocket"]["citations"][0]
+                citation["evidenceId"] = malformed_id
+                with (
+                    self.subTest(source=source, evidenceId=malformed_id),
+                    tempfile.TemporaryDirectory() as directory,
+                ):
+                    path = Path(directory) / "report.json"
+                    path.write_text(json.dumps(report), encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, f"brokerOutage {source} citations"):
+                        VERIFY_MODULE.verify(path)
+
+    def test_rejects_broker_hit_with_wrong_file_md5(self) -> None:
+        report = reliability_report()
+        report["reliability"]["brokerOutage"]["retrieval"]["hits"][0]["fileMd5"] = (
+            "fedcba9876543210fedcba9876543210"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "brokerOutage retrieval"):
                 VERIFY_MODULE.verify(path)
 
     def test_rejects_memory_without_marker_specific_durable_evidence(self) -> None:

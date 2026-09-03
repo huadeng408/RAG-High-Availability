@@ -320,21 +320,23 @@ def _verify_reliability(report: dict) -> None:
         raise ValueError("reliability.brokerOutage retrieval must contain the recovered file and version")
     if not str(websocket.get("answer", "")).strip():
         raise ValueError("reliability.brokerOutage websocket answer must be non-empty")
+    def versioned_evidence_ids(citations: list, label: str) -> set[str]:
+        evidence_ids: set[str] = set()
+        for citation in citations:
+            if not isinstance(citation, dict) or citation.get("documentVersion") != document_version:
+                continue
+            evidence_id = citation.get("evidenceId")
+            if not isinstance(evidence_id, str) or not evidence_id.strip():
+                raise ValueError(f"reliability.brokerOutage {label} citations must have non-empty string evidenceId")
+            evidence_ids.add(evidence_id)
+        return evidence_ids
+
     retrieval_evidence = {
-        citation.get("evidenceId")
+        evidence_id
         for hit in matching_hits
-        for citation in hit.get("citations") or []
-        if isinstance(citation, dict)
-        and citation.get("documentVersion") == document_version
-        and citation.get("evidenceId")
+        for evidence_id in versioned_evidence_ids(hit.get("citations") or [], "retrieval")
     }
-    websocket_evidence = {
-        citation.get("evidenceId")
-        for citation in websocket.get("citations") or []
-        if isinstance(citation, dict)
-        and citation.get("documentVersion") == document_version
-        and citation.get("evidenceId")
-    }
+    websocket_evidence = versioned_evidence_ids(websocket.get("citations") or [], "websocket")
     if not retrieval_evidence.intersection(websocket_evidence):
         raise ValueError("reliability.brokerOutage websocket citations must intersect retrieval evidence")
     counts = broker.get("elasticsearch") or {}
