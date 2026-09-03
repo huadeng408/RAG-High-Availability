@@ -93,7 +93,7 @@ func ensurePipelineTaskSchema() error {
 		return fmt.Errorf("backfill pipeline window: %w", err)
 	}
 	if err := DB.Exec(
-		"UPDATE pipeline_task SET attempt_count = retry_count + CASE WHEN status = 'PENDING' THEN 0 ELSE 1 END WHERE attempt_count = 0",
+		"UPDATE pipeline_task SET attempt_count = CASE WHEN status = 'PENDING' THEN 0 WHEN status = 'FAILED' THEN retry_count ELSE retry_count + 1 END WHERE attempt_count = 0",
 	).Error; err != nil {
 		return fmt.Errorf("backfill pipeline attempt count: %w", err)
 	}

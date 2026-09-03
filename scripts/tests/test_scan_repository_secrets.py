@@ -47,6 +47,37 @@ class SecretScannerTests(unittest.TestCase):
             findings = scanner.scan(root, [source])
         self.assertEqual(3, sum("credential assignment" in item for item in findings))
 
+    def test_rejects_short_alphabetic_and_suffix_shaped_config_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "unsafe.yaml"
+            source.write_text(
+                "password: RHA2025\n"
+                "secret_access_key: minioadmin\n"
+                "jwt_secret: alphabeticsecret\n"
+                "access_token: alphabetictoken\n"
+                "service_password: service_password\n",
+                encoding="utf-8",
+            )
+            findings = scanner.scan(root, [source])
+        self.assertEqual(5, sum("credential assignment" in item for item in findings))
+
+    def test_allows_explicit_environment_expressions_and_documentation_placeholders(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "safe.yaml"
+            source.write_text(
+                "password: ${RHA_PASSWORD:?RHA_PASSWORD is required}\n"
+                "jwt_secret: $RHA_JWT_SECRET\n"
+                "access_token: $env:RHA_ACCESS_TOKEN\n"
+                "api_key: <your-key>\n"
+                "shared_secret: replace-me\n"
+                "access_token_expire_hours: 24\n"
+                "access_token_expired_codes: 9999\n",
+                encoding="utf-8",
+            )
+            self.assertEqual([], scanner.scan(root, [source]))
+
     def test_allows_unquoted_environment_lookups_comments_and_prose(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

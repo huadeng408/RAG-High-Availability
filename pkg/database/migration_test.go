@@ -58,6 +58,7 @@ func TestEnsurePipelineTaskSchemaReplacesLegacyIdentityWithoutLosingRows(t *test
 		stage VARCHAR(20) NOT NULL,
 		chunk_id INTEGER NOT NULL DEFAULT -1,
 		status VARCHAR(20) NOT NULL,
+		retry_count INTEGER NOT NULL DEFAULT 0,
 		idempotency_key VARCHAR(96) NOT NULL
 	)`).Error; err != nil {
 		t.Fatal(err)
@@ -68,7 +69,7 @@ func TestEnsurePipelineTaskSchemaReplacesLegacyIdentityWithoutLosingRows(t *test
 	fileMD5 := "0123456789abcdef0123456789abcdef"
 	legacyKey := strings.Repeat("legacy-key-", 20)
 	if err := db.Exec(
-		"INSERT INTO pipeline_task (id, file_md5, stage, chunk_id, status, idempotency_key) VALUES (1, ?, 'embed', -1, 'FAILED', ?)",
+		"INSERT INTO pipeline_task (id, file_md5, stage, chunk_id, status, retry_count, idempotency_key) VALUES (1, ?, 'embed', -1, 'FAILED', 3, ?)",
 		fileMD5, legacyKey,
 	).Error; err != nil {
 		t.Fatal(err)
@@ -105,6 +106,13 @@ func TestEnsurePipelineTaskSchemaReplacesLegacyIdentityWithoutLosingRows(t *test
 	}
 	if migratedKey != legacyKey {
 		t.Fatalf("legacy idempotency key changed during migration: got %q", migratedKey)
+	}
+	var attemptCount int
+	if err := db.Table("pipeline_task").Select("attempt_count").Where("id = 1").Scan(&attemptCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if attemptCount != 3 {
+		t.Fatalf("failed legacy attempt count = %d, want retry_count 3", attemptCount)
 	}
 	for _, column := range []string{"attempt_count", "publication_status", "publication_attempt_count", "publication_claimed_at", "published_at", "publication_last_error"} {
 		if !db.Migrator().HasColumn("pipeline_task", column) {

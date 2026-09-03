@@ -8,7 +8,7 @@ services:
     ports:
       - "3307:3306"
     environment:
-      MYSQL_ROOT_PASSWORD: RHA2025
+      MYSQL_ROOT_PASSWORD: "${RHA_MYSQL_PASSWORD:?RHA_MYSQL_PASSWORD is required}"
       MYSQL_DATABASE: RHA
     volumes:
       - mysql-data:/var/lib/mysql
@@ -28,10 +28,12 @@ services:
       - "6380:6379"
     volumes:
       - redis-data:/data
-    command: redis-server --bind 0.0.0.0 --port 6379 --requirepass RHA2025 --appendonly yes
+    environment:
+      RHA_REDIS_PASSWORD: "${RHA_REDIS_PASSWORD:?RHA_REDIS_PASSWORD is required}"
+    command: ["redis-server", "--bind", "0.0.0.0", "--port", "6379", "--requirepass", "${RHA_REDIS_PASSWORD:?RHA_REDIS_PASSWORD is required}", "--appendonly", "yes"]
     healthcheck:
       start_period: 5s
-      test: ["CMD", "redis-cli", "-a", "RHA2025", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$${RHA_REDIS_PASSWORD}\" ping"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -44,8 +46,8 @@ services:
       - "9000:9000"
       - "9001:9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: "${RHA_MINIO_ROOT_USER:?RHA_MINIO_ROOT_USER is required}"
+      MINIO_ROOT_PASSWORD: "${RHA_MINIO_ROOT_PASSWORD:?RHA_MINIO_ROOT_PASSWORD is required}"
     command: server /data --console-address ":9001"
     volumes:
       - minio-data:/data
@@ -55,10 +57,13 @@ services:
     container_name: minio-init
     depends_on:
       - minio
+    environment:
+      RHA_MINIO_ROOT_USER: "${RHA_MINIO_ROOT_USER:?RHA_MINIO_ROOT_USER is required}"
+      RHA_MINIO_ROOT_PASSWORD: "${RHA_MINIO_ROOT_PASSWORD:?RHA_MINIO_ROOT_PASSWORD is required}"
     entrypoint: >
       sh -c "
       sleep 5;
-      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc alias set local http://minio:9000 "$${RHA_MINIO_ROOT_USER}" "$${RHA_MINIO_ROOT_PASSWORD}" &&
       mc mb -p local/uploads || true
       "
     restart: "no"

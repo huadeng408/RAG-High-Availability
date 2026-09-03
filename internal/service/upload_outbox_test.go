@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +16,32 @@ import (
 	"github.com/huadeng408/RAG-High-Availability/pkg/tasks"
 	"gorm.io/gorm"
 )
+
+func openDurableInitialTaskOutbox(t *testing.T, path string, migrate bool) (repository.PipelineTaskRepository, *gorm.DB) {
+	t.Helper()
+	dsn := "file:" + filepath.ToSlash(path) + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrate {
+		if err := db.AutoMigrate(&model.FileUpload{}, &model.PipelineTask{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return repository.NewPipelineTaskRepository(db), db
+}
+
+func closeTestDatabase(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func newInitialTaskOutbox(t *testing.T) (repository.PipelineTaskRepository, *gorm.DB, model.FileUpload) {
 	t.Helper()
@@ -126,5 +154,147 @@ func TestUploadCompletionRollsBackWhenInitialTaskCannotBeEnqueued(t *testing.T) 
 	}
 	if count != 0 {
 		t.Fatalf("outbox rows = %d after transaction rollback", count)
+	}
+}
+
+func TestInitialTaskOutboxRecoversStaleClaimAfterProcessRestart(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "outbox.db")
+	firstOutbox, firstDB := openDurableInitialTaskOutbox(t, databasePath, true)
+	upload := model.FileUpload{FileMD5: strings.Repeat("b", 32), FileName: "restart.pdf", TotalSize: 12, UserID: 9, OrgTag: "org-a"}
+	if err := firstDB.Create(&upload).Error; err != nil {
+		t.Fatal(err)
+	}
+	task := tasks.FileProcessingTask{FileMD5: upload.FileMD5, FileName: upload.FileName, Stage: tasks.StageParse}
+	if err := firstOutbox.CompleteUploadAndEnqueueInitialTask(upload.ID, task); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := firstOutbox.ClaimPendingInitialTasks(context.Background(), 1, time.Minute)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("initial claim = %#v, err=%v", claimed, err)
+	}
+	closeTestDatabase(t, firstDB)
+
+	secondOutbox, secondDB := openDurableInitialTaskOutbox(t, databasePath, false)
+	t.Cleanup(func() { closeTestDatabase(t, secondDB) })
+	staleAt := time.Now().Add(-2 * time.Minute)
+	if err := secondDB.Model(&model.PipelineTask{}).Where("id = ?", claimed[0].ID).Update("publication_claimed_at", staleAt).Error; err != nil {
+		t.Fatal(err)
+	}
+	published := 0
+	count, err := dispatchInitialTasksOnce(context.Background(), secondOutbox, func(tasks.FileProcessingTask) error {
+		published++
+		return nil
+	}, 1, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || published != 1 {
+		t.Fatalf("restart published count=%d calls=%d", count, published)
+	}
+	var stored model.PipelineTask
+	if err := secondDB.First(&stored, claimed[0].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.PublicationStatus != model.PipelinePublicationPublished || stored.PublicationAttemptCount != 2 {
+		t.Fatalf("recovered publication metadata = %#v", stored)
+	}
+}
+
+func TestInitialTaskOutboxConcurrentDispatchersPublishOnceAcrossInstances(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "outbox.db")
+	firstOutbox, firstDB := openDurableInitialTaskOutbox(t, databasePath, true)
+	secondOutbox, secondDB := openDurableInitialTaskOutbox(t, databasePath, false)
+	t.Cleanup(func() { closeTestDatabase(t, firstDB) })
+	t.Cleanup(func() { closeTestDatabase(t, secondDB) })
+	upload := model.FileUpload{FileMD5: strings.Repeat("c", 32), FileName: "contended.pdf", TotalSize: 12, UserID: 10, OrgTag: "org-a"}
+	if err := firstDB.Create(&upload).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := firstOutbox.CompleteUploadAndEnqueueInitialTask(upload.ID, tasks.FileProcessingTask{FileMD5: upload.FileMD5, FileName: upload.FileName, Stage: tasks.StageParse}); err != nil {
+		t.Fatal(err)
+	}
+
+	queryReady := make(chan struct{}, 2)
+	releaseQueries := make(chan struct{})
+	registerBarrier := func(db *gorm.DB, name string) {
+		t.Helper()
+		if err := db.Callback().Query().After("gorm:query").Register(name, func(tx *gorm.DB) {
+			if tx.Statement.Table == "pipeline_task" {
+				queryReady <- struct{}{}
+				<-releaseQueries
+			}
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	registerBarrier(firstDB, "test:first-claim-barrier")
+	registerBarrier(secondDB, "test:second-claim-barrier")
+
+	type dispatchResult struct {
+		count int
+		err   error
+	}
+	results := make(chan dispatchResult, 2)
+	start := make(chan struct{})
+	var publishCalls int32
+	for _, outbox := range []repository.PipelineTaskRepository{firstOutbox, secondOutbox} {
+		go func(candidate repository.PipelineTaskRepository) {
+			<-start
+			count, err := dispatchInitialTasksOnce(context.Background(), candidate, func(tasks.FileProcessingTask) error {
+				atomic.AddInt32(&publishCalls, 1)
+				return nil
+			}, 1, time.Minute)
+			results <- dispatchResult{count: count, err: err}
+		}(outbox)
+	}
+	close(start)
+	<-queryReady
+	<-queryReady
+	close(releaseQueries)
+
+	total := 0
+	for range 2 {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("concurrent dispatcher error: %v", result.err)
+		}
+		total += result.count
+	}
+	if total != 1 || atomic.LoadInt32(&publishCalls) != 1 {
+		t.Fatalf("concurrent dispatch count=%d publish calls=%d, want one", total, publishCalls)
+	}
+}
+
+func TestInitialTaskOutboxRepublishesOnlyAfterPublishBeforeAckCrashWindow(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "outbox.db")
+	firstOutbox, firstDB := openDurableInitialTaskOutbox(t, databasePath, true)
+	upload := model.FileUpload{FileMD5: strings.Repeat("d", 32), FileName: "at-least-once.pdf", TotalSize: 12, UserID: 11, OrgTag: "org-a"}
+	if err := firstDB.Create(&upload).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := firstOutbox.CompleteUploadAndEnqueueInitialTask(upload.ID, tasks.FileProcessingTask{FileMD5: upload.FileMD5, FileName: upload.FileName, Stage: tasks.StageParse}); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := firstOutbox.ClaimPendingInitialTasks(context.Background(), 1, time.Minute)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("initial claim = %#v, err=%v", claimed, err)
+	}
+	publishCalls := 1 // Kafka acknowledged, then the process exited before MarkInitialTaskPublished.
+	closeTestDatabase(t, firstDB)
+
+	secondOutbox, secondDB := openDurableInitialTaskOutbox(t, databasePath, false)
+	t.Cleanup(func() { closeTestDatabase(t, secondDB) })
+	if err := secondDB.Model(&model.PipelineTask{}).Where("id = ?", claimed[0].ID).Update("publication_claimed_at", time.Now().Add(-2*time.Minute)).Error; err != nil {
+		t.Fatal(err)
+	}
+	count, err := dispatchInitialTasksOnce(context.Background(), secondOutbox, func(tasks.FileProcessingTask) error {
+		publishCalls++
+		return nil
+	}, 1, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || publishCalls != 2 {
+		t.Fatalf("crash-window dispatch count=%d publish calls=%d, want one retry and two total deliveries", count, publishCalls)
 	}
 }

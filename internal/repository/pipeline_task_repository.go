@@ -9,11 +9,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/huadeng408/RAG-High-Availability/internal/model"
-	"github.com/huadeng408/RAG-High-Availability/pkg/tasks"
 	"strings"
 	"time"
 
+	"github.com/huadeng408/RAG-High-Availability/internal/model"
+	"github.com/huadeng408/RAG-High-Availability/pkg/tasks"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -74,48 +74,43 @@ func (r *pipelineTaskRepository) ClaimPendingInitialTasks(ctx context.Context, l
 	}
 	now := time.Now()
 	expired := now.Add(-lease)
-	claimed := make([]model.PipelineTask, 0, limit)
-	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		query := tx.Where(
-			"task_payload <> '' AND (publication_status = ? OR (publication_status = ? AND publication_claimed_at <= ?))",
-			model.PipelinePublicationPending,
-			model.PipelinePublicationClaimed,
-			expired,
-		).Order("id asc").Limit(limit)
-		if tx.Dialector.Name() == "mysql" {
-			query = query.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
+	query := r.db.WithContext(ctx).Where(
+		"task_payload <> '' AND (publication_status = ? OR (publication_status = ? AND publication_claimed_at <= ?))",
+		model.PipelinePublicationPending,
+		model.PipelinePublicationClaimed,
+		expired,
+	).Order("id asc").Limit(limit)
+	var candidates []model.PipelineTask
+	if err := query.Find(&candidates).Error; err != nil {
+		return nil, err
+	}
+
+	claimed := make([]model.PipelineTask, 0, len(candidates))
+	for _, candidate := range candidates {
+		result := r.db.WithContext(ctx).Model(&model.PipelineTask{}).
+			Where(
+				"id = ? AND (publication_status = ? OR (publication_status = ? AND publication_claimed_at <= ?))",
+				candidate.ID,
+				model.PipelinePublicationPending,
+				model.PipelinePublicationClaimed,
+				expired,
+			).
+			Updates(map[string]any{
+				"publication_status":        model.PipelinePublicationClaimed,
+				"publication_claimed_at":    now,
+				"publication_attempt_count": gorm.Expr("publication_attempt_count + 1"),
+			})
+		if result.Error != nil {
+			return claimed, result.Error
 		}
-		var candidates []model.PipelineTask
-		if err := query.Find(&candidates).Error; err != nil {
-			return err
+		if result.RowsAffected == 1 {
+			candidate.PublicationStatus = model.PipelinePublicationClaimed
+			candidate.PublicationClaimedAt = &now
+			candidate.PublicationAttemptCount++
+			claimed = append(claimed, candidate)
 		}
-		for _, candidate := range candidates {
-			result := tx.Model(&model.PipelineTask{}).
-				Where(
-					"id = ? AND (publication_status = ? OR (publication_status = ? AND publication_claimed_at <= ?))",
-					candidate.ID,
-					model.PipelinePublicationPending,
-					model.PipelinePublicationClaimed,
-					expired,
-				).
-				Updates(map[string]any{
-					"publication_status":        model.PipelinePublicationClaimed,
-					"publication_claimed_at":    now,
-					"publication_attempt_count": gorm.Expr("publication_attempt_count + 1"),
-				})
-			if result.Error != nil {
-				return result.Error
-			}
-			if result.RowsAffected == 1 {
-				candidate.PublicationStatus = model.PipelinePublicationClaimed
-				candidate.PublicationClaimedAt = &now
-				candidate.PublicationAttemptCount++
-				claimed = append(claimed, candidate)
-			}
-		}
-		return nil
-	})
-	return claimed, err
+	}
+	return claimed, nil
 }
 
 // MarkInitialTaskPublished records Kafka acknowledgement for the active claim.

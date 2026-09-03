@@ -521,13 +521,13 @@ def exercise_alias_migration(
     switched_indices: list[str] = []
     rollback_indices: list[str] = []
     readback_verified = False
-    switched_alias = False
+    switch_attempted = False
     try:
+        switch_attempted = True
         elasticsearch.request_json("POST", "/_aliases", {"actions": [
             {"remove": {"index": "*", "alias": alias_name, "must_exist": False}},
             {"add": {"index": probe_index, "alias": alias_name}},
         ]})
-        switched_alias = True
         switched = elasticsearch.request_json("GET", "/_alias/" + quote(alias_name, safe=""))
         switched_indices = sorted(switched.body)
         if switched_indices != [probe_index]:
@@ -542,7 +542,7 @@ def exercise_alias_migration(
         if not readback_verified:
             raise RuntimeError("alias probe document readback failed")
     finally:
-        if switched_alias:
+        if switch_attempted:
             elasticsearch.request_json("POST", "/_aliases", {"actions": [
                 {"remove": {"index": "*", "alias": alias_name, "must_exist": False}},
                 {"add": {"index": previous_index, "alias": alias_name}},

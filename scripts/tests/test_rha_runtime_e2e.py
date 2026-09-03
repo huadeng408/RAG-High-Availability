@@ -58,6 +58,33 @@ class RuntimeE2ETest(unittest.TestCase):
             runtime.exercise_alias_migration(client, "rha-knowledge-active", "run-1")
         self.assertEqual("rha-knowledge-v2", client.active)
 
+    def test_alias_switch_timeout_after_apply_restores_previous_target(self) -> None:
+        runtime = load_runtime_module()
+
+        class AmbiguousTimeoutAliasClient:
+            def __init__(self) -> None:
+                self.active = "rha-knowledge-v2"
+                self.switch_attempts = 0
+
+            def request_json(self, method: str, path: str, payload=None):
+                if method == "GET" and path.startswith("/_alias/"):
+                    return SimpleNamespace(body={self.active: {"aliases": {"rha-knowledge-active": {}}}}, status_code=200)
+                if method == "GET" and path.endswith("/_mapping"):
+                    return SimpleNamespace(body={self.active: {"mappings": {"properties": {"text_content": {}, "vector": {}}}}}, status_code=200)
+                if method == "POST" and path == "/_aliases":
+                    self.active = payload["actions"][-1]["add"]["index"]
+                    self.switch_attempts += 1
+                    if self.switch_attempts == 1:
+                        raise TimeoutError("alias switch response timed out after apply")
+                    return SimpleNamespace(body={"acknowledged": True}, status_code=200)
+                return SimpleNamespace(body={"acknowledged": True}, status_code=200)
+
+        client = AmbiguousTimeoutAliasClient()
+        with self.assertRaisesRegex(TimeoutError, "timed out after apply"):
+            runtime.exercise_alias_migration(client, "rha-knowledge-active", "run-timeout")
+        self.assertEqual("rha-knowledge-v2", client.active)
+        self.assertEqual(2, client.switch_attempts)
+
     def test_dlq_consumer_scans_past_stale_retained_record(self) -> None:
         runtime = load_runtime_module()
         stale = json.dumps({"dlq_id": "old"})
