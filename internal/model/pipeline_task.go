@@ -4,35 +4,44 @@ package model
 import "time"
 
 const (
-	PipelineStatusPending    = "PENDING"
-	PipelineStatusProcessing = "PROCESSING"
-	PipelineStatusSuccess    = "SUCCESS"
-	PipelineStatusFailed     = "FAILED"
+	PipelineStatusPending        = "PENDING"
+	PipelineStatusProcessing     = "PROCESSING"
+	PipelineStatusSuccess        = "SUCCESS"
+	PipelineStatusFailed         = "FAILED"
+	PipelinePublicationPending   = "PENDING"
+	PipelinePublicationClaimed   = "CLAIMED"
+	PipelinePublicationPublished = "PUBLISHED"
 )
 
 // PipelineTask tracks per-stage processing status for replay and observability.
 type PipelineTask struct {
-	ID              uint       `gorm:"primaryKey;autoIncrement" json:"id"`
-	FileMD5         string     `gorm:"type:varchar(32);not null" json:"fileMd5"`
-	DocumentVersion string     `gorm:"type:varchar(96);not null;uniqueIndex:idx_document_version_stage_window,priority:1" json:"documentVersion"`
-	Stage           string     `gorm:"type:varchar(20);not null;uniqueIndex:idx_document_version_stage_window,priority:2" json:"stage"`
-	WindowID        string     `gorm:"type:varchar(64);not null;uniqueIndex:idx_document_version_stage_window,priority:3" json:"windowId"`
-	ChunkID         int        `gorm:"not null;default:-1" json:"chunkId"`
-	Status          string     `gorm:"type:varchar(20);not null;index" json:"status"`
-	RetryCount      int        `gorm:"not null;default:0" json:"retryCount"`
-	LastError       string     `gorm:"type:text" json:"lastError"`
-	ErrorClass      string     `gorm:"type:varchar(32)" json:"errorClass,omitempty"`
-	LastTraceID     string     `gorm:"type:varchar(128)" json:"lastTraceId,omitempty"`
-	NextAttemptAt   *time.Time `json:"nextAttemptAt,omitempty"`
-	IdempotencyKey  string     `gorm:"type:char(64);not null;uniqueIndex" json:"idempotencyKey"`
-	TaskPayload     string     `gorm:"column:task_payload;type:longtext" json:"-"`
-	DLQMessageID    string     `gorm:"column:dlq_message_id;type:char(64);index" json:"dlqMessageId,omitempty"`
-	DLQPayload      string     `gorm:"column:dlq_payload;type:longtext" json:"-"`
-	DeadLetteredAt  *time.Time `gorm:"column:dead_lettered_at" json:"deadLetteredAt,omitempty"`
-	ReplayCount     int        `gorm:"column:replay_count;not null;default:0" json:"replayCount"`
-	LastReplayedAt  *time.Time `gorm:"column:last_replayed_at" json:"lastReplayedAt,omitempty"`
-	UpdatedAt       time.Time  `gorm:"autoUpdateTime" json:"updatedAt"`
-	CreatedAt       time.Time  `gorm:"autoCreateTime" json:"createdAt"`
+	ID                      uint       `gorm:"primaryKey;autoIncrement" json:"id"`
+	FileMD5                 string     `gorm:"type:varchar(32);not null" json:"fileMd5"`
+	DocumentVersion         string     `gorm:"type:varchar(96);not null;uniqueIndex:idx_document_version_stage_window,priority:1" json:"documentVersion"`
+	Stage                   string     `gorm:"type:varchar(20);not null;uniqueIndex:idx_document_version_stage_window,priority:2" json:"stage"`
+	WindowID                string     `gorm:"type:varchar(64);not null;uniqueIndex:idx_document_version_stage_window,priority:3" json:"windowId"`
+	ChunkID                 int        `gorm:"not null;default:-1" json:"chunkId"`
+	Status                  string     `gorm:"type:varchar(20);not null;index" json:"status"`
+	RetryCount              int        `gorm:"not null;default:0" json:"retryCount"`
+	AttemptCount            int        `gorm:"not null;default:0" json:"attemptCount"`
+	LastError               string     `gorm:"type:text" json:"lastError"`
+	ErrorClass              string     `gorm:"type:varchar(32)" json:"errorClass,omitempty"`
+	LastTraceID             string     `gorm:"type:varchar(128)" json:"lastTraceId,omitempty"`
+	NextAttemptAt           *time.Time `json:"nextAttemptAt,omitempty"`
+	IdempotencyKey          string     `gorm:"type:varchar(255);not null;uniqueIndex" json:"idempotencyKey"`
+	TaskPayload             string     `gorm:"column:task_payload;type:longtext" json:"-"`
+	PublicationStatus       string     `gorm:"column:publication_status;type:varchar(20);not null;default:'';index" json:"publicationStatus,omitempty"`
+	PublicationAttemptCount int        `gorm:"column:publication_attempt_count;not null;default:0" json:"publicationAttemptCount,omitempty"`
+	PublicationClaimedAt    *time.Time `gorm:"column:publication_claimed_at" json:"publicationClaimedAt,omitempty"`
+	PublishedAt             *time.Time `gorm:"column:published_at" json:"publishedAt,omitempty"`
+	PublicationLastError    string     `gorm:"column:publication_last_error;type:text" json:"publicationLastError,omitempty"`
+	DLQMessageID            string     `gorm:"column:dlq_message_id;type:char(64);index" json:"dlqMessageId,omitempty"`
+	DLQPayload              string     `gorm:"column:dlq_payload;type:longtext" json:"-"`
+	DeadLetteredAt          *time.Time `gorm:"column:dead_lettered_at" json:"deadLetteredAt,omitempty"`
+	ReplayCount             int        `gorm:"column:replay_count;not null;default:0" json:"replayCount"`
+	LastReplayedAt          *time.Time `gorm:"column:last_replayed_at" json:"lastReplayedAt,omitempty"`
+	UpdatedAt               time.Time  `gorm:"autoUpdateTime" json:"updatedAt"`
+	CreatedAt               time.Time  `gorm:"autoCreateTime" json:"createdAt"`
 }
 
 // TableName handles table name.

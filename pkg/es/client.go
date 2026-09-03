@@ -126,7 +126,7 @@ func InitES(esCfg config.ElasticsearchConfig, vectorDims int) error {
 	}
 	ESClient = client
 	if strings.TrimSpace(esCfg.IndexName) == "" || strings.TrimSpace(esCfg.IndexName) == KnowledgeReadAlias {
-		return EnsureRHAIndices(context.Background(), vectorDims)
+		return EnsureRHAIndices(context.Background(), vectorDims, esCfg.IndexGeneration)
 	}
 	return createIndexIfNotExists(esCfg.IndexName, vectorDims)
 }

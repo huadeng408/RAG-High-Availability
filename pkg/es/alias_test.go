@@ -17,3 +17,10 @@ func TestAliasSwitchUsesAtomicRemoveAndAddActions(t *testing.T) {
 		t.Fatalf("missing alias target: %s", body)
 	}
 }
+
+func TestPhysicalIndexNamesUseConfiguredGeneration(t *testing.T) {
+	knowledge, evidence := physicalIndexNames(7)
+	if knowledge != "rha-knowledge-v7" || evidence != "rha-evidence-v7" {
+		t.Fatalf("physical indices = %q %q", knowledge, evidence)
+	}
+}

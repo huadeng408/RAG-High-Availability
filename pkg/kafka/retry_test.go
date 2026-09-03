@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -203,7 +204,19 @@ func TestPipelineWindowIDDerivesEmbedWindowFromTaskChunk(t *testing.T) {
 func TestMalformedKafkaMessagePublishesToDLQBeforeCommit(t *testing.T) {
 	var events []string
 	err := handleMalformedMessage([]byte("not-json"), func(payload []byte) error {
-		events = append(events, "publish:"+string(payload))
+		var envelope struct {
+			Kind          string `json:"kind"`
+			DLQID         string `json:"dlq_id"`
+			PayloadSHA256 string `json:"payload_sha256"`
+			PayloadBase64 string `json:"payload_base64"`
+		}
+		if err := json.Unmarshal(payload, &envelope); err != nil {
+			t.Fatalf("malformed DLQ envelope is not JSON: %v", err)
+		}
+		if envelope.Kind != "malformed-kafka-message" || len(envelope.DLQID) != 64 || envelope.DLQID != envelope.PayloadSHA256 || envelope.PayloadBase64 == "" {
+			t.Fatalf("malformed DLQ envelope = %#v", envelope)
+		}
+		events = append(events, "publish:"+envelope.DLQID)
 		return nil
 	}, func() error {
 		events = append(events, "commit")
@@ -212,8 +225,23 @@ func TestMalformedKafkaMessagePublishesToDLQBeforeCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := events, []string{"publish:not-json", "commit"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Fatalf("events = %#v, want %#v", got, want)
+	if len(events) != 2 || !strings.HasPrefix(events[0], "publish:") || events[1] != "commit" {
+		t.Fatalf("events = %#v, want publish before commit", events)
+	}
+}
+
+func TestMalformedKafkaMessageDuplicateUsesStableDeadLetterIdentity(t *testing.T) {
+	var published [][]byte
+	for range 2 {
+		if err := handleMalformedMessage([]byte("not-json"), func(payload []byte) error {
+			published = append(published, append([]byte(nil), payload...))
+			return nil
+		}, func() error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if string(published[0]) != string(published[1]) {
+		t.Fatalf("duplicate malformed deliveries produced different envelopes:\n%s\n%s", published[0], published[1])
 	}
 }
 

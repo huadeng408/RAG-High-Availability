@@ -34,6 +34,30 @@ def load_runtime_module():
 
 
 class RuntimeE2ETest(unittest.TestCase):
+    def test_alias_probe_failure_restores_previous_target(self) -> None:
+        runtime = load_runtime_module()
+
+        class AliasClient:
+            def __init__(self) -> None:
+                self.active = "rha-knowledge-v2"
+
+            def request_json(self, method: str, path: str, payload=None):
+                if method == "GET" and path.startswith("/_alias/"):
+                    return SimpleNamespace(body={self.active: {"aliases": {"rha-knowledge-active": {}}}}, status_code=200)
+                if method == "GET" and path.endswith("/_mapping"):
+                    return SimpleNamespace(body={self.active: {"mappings": {"properties": {"text_content": {}, "vector": {}}}}}, status_code=200)
+                if method == "POST" and path == "/_aliases":
+                    self.active = payload["actions"][-1]["add"]["index"]
+                    return SimpleNamespace(body={"acknowledged": True}, status_code=200)
+                if method == "PUT" and "/_doc/alias-probe-" in path:
+                    raise RuntimeError("injected readback write failure")
+                return SimpleNamespace(body={"acknowledged": True}, status_code=200)
+
+        client = AliasClient()
+        with self.assertRaisesRegex(RuntimeError, "injected readback"):
+            runtime.exercise_alias_migration(client, "rha-knowledge-active", "run-1")
+        self.assertEqual("rha-knowledge-v2", client.active)
+
     def test_dlq_consumer_scans_past_stale_retained_record(self) -> None:
         runtime = load_runtime_module()
         stale = json.dumps({"dlq_id": "old"})
@@ -348,7 +372,7 @@ class RuntimeE2ETest(unittest.TestCase):
                 )
                 report_text = output_path.read_text(encoding="utf-8")
                 report = json.loads(report_text)
-                provenance_exists = output_path.with_suffix(output_path.suffix + ".provenance.json").is_file()
+                integrity_exists = output_path.with_suffix(output_path.suffix + ".integrity.json").is_file()
         finally:
             server.shutdown()
             server.server_close()
@@ -376,7 +400,7 @@ class RuntimeE2ETest(unittest.TestCase):
         self.assertEqual(report["pipeline"]["aliasReadback"]["indices"], ["rha-knowledge-v2"])
         self.assertTrue(any(observed["aliasProbe"]["vector"]))
         self.assertEqual(report["multimodalEvidence"]["total"], 57)
-        self.assertTrue(provenance_exists)
+        self.assertTrue(integrity_exists)
         self.assertEqual(report["retrieval"]["hits"][0]["citations"], [citation])
         self.assertEqual(report["websocket"]["citations"], [citation])
         self.assertEqual(report["image"]["pipeline"]["status"], "SEARCHABLE")

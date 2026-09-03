@@ -241,6 +241,68 @@ git commit -m "docs: document reproducible RHA release evidence"
 git push origin main
 \`\`\`
 
+### Task 7: Close residual delivery blockers
+
+**Files:**
+- Modify: `internal/model/pipeline_task.go`
+- Modify: `internal/repository/pipeline_task_repository.go`
+- Modify: `internal/service/upload_service.go`
+- Modify: `internal/service/document_service.go`
+- Modify: `cmd/server/main.go`
+- Modify: `pkg/database/migration.go`
+- Modify: `docs/ddl.sql`
+- Modify: `internal/config/config.go`
+- Modify: `pkg/es/alias.go`
+- Modify: `scripts/rha_runtime_e2e.py`
+- Modify: `scripts/scan_repository_secrets.py`
+- Modify: `scripts/verify_rha_release.py`
+- Modify: focused Go and Python tests for the touched contracts
+
+**Interfaces:**
+- Consumes: the durable initial parse task persisted by merge, Kafka producer availability, existing pipeline idempotency, configured Elasticsearch generation, and tracked repository text.
+- Produces: an automatically drained initial-task outbox, migration-safe idempotency storage, exact durable attempt counts, failure-safe Alias rollback, broader credential detection, and honestly labelled report-integrity evidence.
+
+- [ ] **Step 1: Add focused failing tests**
+
+Add tests proving all of the following fail on `4d89c0f`: a persisted initial task is republished by a restarted dispatcher without a second merge request; existing non-hash idempotency keys survive runtime schema migration; attempt count reflects actual processing starts; an Alias probe failure always restores the previous target; unquoted YAML/TOML/env-style `password`, `jwt_secret`, and `access_token` values are rejected while documented placeholders remain allowed.
+
+```powershell
+go test ./internal/repository ./internal/service ./pkg/database ./pkg/es -run 'InitialTask|PipelineTaskSchema|AttemptCount|Alias' -v
+python -m unittest scripts.tests.test_rha_runtime_e2e scripts.tests.test_scan_repository_secrets scripts.tests.test_verify_rha_release -v
+```
+
+Expected: each newly added regression test fails for the reviewed behavior, not from test setup.
+
+- [ ] **Step 2: Implement durable automatic outbox delivery**
+
+Keep upload completion and initial parse-task acceptance in one database transaction. Add explicit publication state/attempt metadata to `PipelineTask`; repository operations must claim pending initial publications, publish them, and mark success only after Kafka acknowledges. A publish-before-mark crash may duplicate delivery, so retain the stable task identity. Start a context-cancellable dispatcher from `cmd/server/main.go`; after broker recovery it must drain persisted tasks without a client repeating `/upload/merge`.
+
+- [ ] **Step 3: Make schema and status semantics migration-safe**
+
+Use an idempotency column wide enough to retain existing legacy values while new identities remain SHA-256 values; never narrow legacy rows before a backfill. Persist `attempt_count` and increment it on each transition into actual processing instead of deriving attempts from retry count. Keep the schema declaration, runtime migration, model, repository, status DTO, and focused tests consistent.
+
+- [ ] **Step 4: Make Alias and secret checks fail closed**
+
+Resolve physical index generation from configuration rather than a production constant. Wrap the runtime probe switch/readback in unconditional rollback and assert the old target after both success and injected probe failure. Expand credential assignment parsing to unquoted values and compound credential key names without flagging environment lookups, placeholders, comments, or ordinary prose.
+
+- [ ] **Step 5: Align evidence language and close scoped Task 4 debt**
+
+Describe the report sidecar as integrity binding to the exact runner bytes, not unforgeable provenance; the release process must still execute a fresh Docker run. Add explicit coverage that at-least-once malformed-message duplicates are harmless under stable identity. Map replay validation/not-found/conflict/infrastructure failures to distinct HTTP classes if the existing service errors permit deterministic classification; otherwise document the exact remaining API limitation.
+
+- [ ] **Step 6: Verify, review, and commit without pushing**
+
+```powershell
+go test ./...
+go vet ./...
+$env:PYTHONPATH='ai-orchestrator'
+python -m unittest discover -s ai-orchestrator/tests -v
+python -m unittest discover -s scripts/tests -v
+python scripts/scan_repository_secrets.py --tracked-only
+git diff --check
+```
+
+Expected: all suites pass, the five protected user paths remain unstaged, and one scoped commit is created on `main`. A fresh Docker release gate remains mandatory after independent task review.
+
 ## Completion Audit
 
 The goal is complete only when Task 2 runtime harness has passed against real upload, Kafka, parser, index, retrieval, permission, WebSocket, citation, and replay behavior; Tasks 3-6 have passed their focused and full suites; the release verifier passes; and remote origin/main contains all scoped commits. A fixture report, a green unit suite, or an upload-only benchmark alone is insufficient.

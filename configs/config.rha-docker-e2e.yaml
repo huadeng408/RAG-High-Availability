@@ -40,6 +40,7 @@ tika:
 elasticsearch:
   addresses: "http://es:9200"
   index_name: "rha-knowledge-active"
+  index_generation: 2
 embedding:
   model: "rha-fixture-embedding"
   base_url: "http://model-stub:8010"

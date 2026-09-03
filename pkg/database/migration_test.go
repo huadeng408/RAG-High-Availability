@@ -1,11 +1,26 @@
 package database
 
 import (
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/glebarez/sqlite"
+	"github.com/huadeng408/RAG-High-Availability/internal/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 )
+
+func TestPipelineTaskSchemaRetainsLegacyNonHashIdempotencyCapacity(t *testing.T) {
+	parsed, err := schema.Parse(&model.PipelineTask{}, &sync.Map{}, schema.NamingStrategy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	field := parsed.LookUpField("IdempotencyKey")
+	if field == nil || field.TagSettings["TYPE"] != "varchar(255)" {
+		t.Fatalf("idempotency ORM capacity = %v, want at least 255", field)
+	}
+}
 
 func TestEnsureRuntimeSchemaAddsImageMetadataColumns(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
@@ -51,9 +66,10 @@ func TestEnsurePipelineTaskSchemaReplacesLegacyIdentityWithoutLosingRows(t *test
 		t.Fatal(err)
 	}
 	fileMD5 := "0123456789abcdef0123456789abcdef"
+	legacyKey := strings.Repeat("legacy-key-", 20)
 	if err := db.Exec(
-		"INSERT INTO pipeline_task (id, file_md5, stage, chunk_id, status, idempotency_key) VALUES (1, ?, 'embed', -1, 'FAILED', 'legacy')",
-		fileMD5,
+		"INSERT INTO pipeline_task (id, file_md5, stage, chunk_id, status, idempotency_key) VALUES (1, ?, 'embed', -1, 'FAILED', ?)",
+		fileMD5, legacyKey,
 	).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -82,6 +98,18 @@ func TestEnsurePipelineTaskSchemaReplacesLegacyIdentityWithoutLosingRows(t *test
 	}
 	if migrated.DocumentVersion != "upload:"+fileMD5 || migrated.WindowID != "root" {
 		t.Fatalf("legacy identity backfill = %#v", migrated)
+	}
+	var migratedKey string
+	if err := db.Table("pipeline_task").Select("idempotency_key").Where("id = 1").Scan(&migratedKey).Error; err != nil {
+		t.Fatal(err)
+	}
+	if migratedKey != legacyKey {
+		t.Fatalf("legacy idempotency key changed during migration: got %q", migratedKey)
+	}
+	for _, column := range []string{"attempt_count", "publication_status", "publication_attempt_count", "publication_claimed_at", "published_at", "publication_last_error"} {
+		if !db.Migrator().HasColumn("pipeline_task", column) {
+			t.Fatalf("pipeline_task.%s was not added", column)
+		}
 	}
 	if err := db.Exec(
 		"INSERT INTO pipeline_task (id, file_md5, stage, chunk_id, status, idempotency_key, document_version, window_id) VALUES (2, ?, 'embed', -1, 'PENDING', 'versioned', 'version-sha', 'window-2')",

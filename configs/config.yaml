@@ -50,6 +50,7 @@ elasticsearch:
   username: ""
   password: ""
   index_name: "rha-knowledge-active"
+  index_generation: 2
 
 # Embedding model config
 embedding:

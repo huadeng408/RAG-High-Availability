@@ -101,10 +101,11 @@ type TikaConfig struct {
 
 // ElasticsearchConfig 存储 Elasticsearch 相关的配置。
 type ElasticsearchConfig struct {
-	Addresses string `mapstructure:"addresses"`
-	Username  string `mapstructure:"username"`
-	Password  string `mapstructure:"password"`
-	IndexName string `mapstructure:"index_name"`
+	Addresses       string `mapstructure:"addresses"`
+	Username        string `mapstructure:"username"`
+	Password        string `mapstructure:"password"`
+	IndexName       string `mapstructure:"index_name"`
+	IndexGeneration int    `mapstructure:"index_generation"`
 }
 
 // MinIOConfig 存储 MinIO 对象存储的配置。

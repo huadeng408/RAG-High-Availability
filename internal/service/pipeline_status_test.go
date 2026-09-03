@@ -10,11 +10,11 @@ import (
 func TestAggregatePipelineStatusRequiresEveryStageForSearchable(t *testing.T) {
 	now := time.Now()
 	tasks := []model.PipelineTask{
-		{FileMD5: "file-1", DocumentVersion: "version-1", Stage: "parse", WindowID: "root", Status: model.PipelineStatusSuccess, CreatedAt: now},
-		{FileMD5: "file-1", DocumentVersion: "version-1", Stage: "chunk", WindowID: "root", Status: model.PipelineStatusSuccess, CreatedAt: now},
-		{FileMD5: "file-1", DocumentVersion: "version-1", Stage: "embed", WindowID: "window-1", Status: model.PipelineStatusSuccess, CreatedAt: now},
-		{FileMD5: "file-1", DocumentVersion: "version-1", Stage: "embed", WindowID: "window-2", Status: model.PipelineStatusSuccess, CreatedAt: now},
-		{FileMD5: "file-1", DocumentVersion: "version-1", Stage: "index", WindowID: "root", Status: model.PipelineStatusSuccess, CreatedAt: now},
+		{FileMD5: "file-1", DocumentVersion: "version-1", Stage: "parse", WindowID: "root", Status: model.PipelineStatusSuccess, AttemptCount: 1, CreatedAt: now},
+		{FileMD5: "file-1", DocumentVersion: "version-1", Stage: "chunk", WindowID: "root", Status: model.PipelineStatusSuccess, AttemptCount: 1, CreatedAt: now},
+		{FileMD5: "file-1", DocumentVersion: "version-1", Stage: "embed", WindowID: "window-1", Status: model.PipelineStatusSuccess, AttemptCount: 1, CreatedAt: now},
+		{FileMD5: "file-1", DocumentVersion: "version-1", Stage: "embed", WindowID: "window-2", Status: model.PipelineStatusSuccess, AttemptCount: 1, CreatedAt: now},
+		{FileMD5: "file-1", DocumentVersion: "version-1", Stage: "index", WindowID: "root", Status: model.PipelineStatusSuccess, AttemptCount: 1, CreatedAt: now},
 	}
 
 	status := AggregatePipelineStatus("file-1", tasks)
@@ -61,7 +61,7 @@ func TestAggregatePipelineStatusPreservesFailureAndRetryMetadata(t *testing.T) {
 	tasks := []model.PipelineTask{
 		{
 			FileMD5: "file-2", DocumentVersion: "version-2", Stage: "parse", WindowID: "root",
-			Status: model.PipelineStatusFailed, RetryCount: 2, LastError: "mineru unavailable", ErrorClass: "dependency", LastTraceID: "trace-2", NextAttemptAt: &next,
+			Status: model.PipelineStatusFailed, RetryCount: 9, AttemptCount: 3, LastError: "mineru unavailable", ErrorClass: "dependency", LastTraceID: "trace-2", NextAttemptAt: &next,
 			DLQMessageID: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
 			DLQPayload:   "must-not-leak", DeadLetteredAt: &deadLetteredAt, ReplayCount: 1, LastReplayedAt: &lastReplayedAt,
 		},
@@ -71,7 +71,7 @@ func TestAggregatePipelineStatusPreservesFailureAndRetryMetadata(t *testing.T) {
 	if status.Status != model.PipelineStatusFailed {
 		t.Fatalf("overall status = %q, want FAILED", status.Status)
 	}
-	if status.Stages[0].RetryCount != 2 || status.Stages[0].LastError != "mineru unavailable" {
+	if status.Stages[0].RetryCount != 9 || status.Stages[0].LastError != "mineru unavailable" {
 		t.Fatalf("failure metadata not preserved: %#v", status.Stages[0])
 	}
 	if status.Stages[0].AttemptCount != 3 || status.Stages[0].ErrorClass != "dependency" || status.Stages[0].LastTraceID != "trace-2" {

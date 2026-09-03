@@ -10,6 +10,7 @@ import (
 )
 
 const (
+	DefaultIndexGeneration = 2
 	KnowledgePhysicalIndex = "rha-knowledge-v2"
 	EvidencePhysicalIndex  = "rha-evidence-v2"
 	KnowledgeReadAlias     = "rha-knowledge-active"
@@ -18,20 +19,28 @@ const (
 
 // EnsureRHAIndices creates the versioned knowledge/evidence indices and points
 // the read aliases at the known-good physical generation.
-func EnsureRHAIndices(ctx context.Context, vectorDims int) error {
+func EnsureRHAIndices(ctx context.Context, vectorDims, generation int) error {
 	if ESClient == nil {
 		return fmt.Errorf("elasticsearch client is not initialized")
 	}
-	if err := createIndexIfNotExists(KnowledgePhysicalIndex, vectorDims); err != nil {
+	knowledgeIndex, evidenceIndex := physicalIndexNames(generation)
+	if err := createIndexIfNotExists(knowledgeIndex, vectorDims); err != nil {
 		return err
 	}
-	if err := createEvidenceIndexIfNotExists(EvidencePhysicalIndex); err != nil {
+	if err := createEvidenceIndexIfNotExists(evidenceIndex); err != nil {
 		return err
 	}
-	if err := SwitchAlias(ctx, KnowledgeReadAlias, KnowledgePhysicalIndex); err != nil {
+	if err := SwitchAlias(ctx, KnowledgeReadAlias, knowledgeIndex); err != nil {
 		return err
 	}
-	return SwitchAlias(ctx, EvidenceReadAlias, EvidencePhysicalIndex)
+	return SwitchAlias(ctx, EvidenceReadAlias, evidenceIndex)
+}
+
+func physicalIndexNames(generation int) (string, string) {
+	if generation <= 0 {
+		generation = DefaultIndexGeneration
+	}
+	return fmt.Sprintf("rha-knowledge-v%d", generation), fmt.Sprintf("rha-evidence-v%d", generation)
 }
 
 func createEvidenceIndexIfNotExists(indexName string) error {

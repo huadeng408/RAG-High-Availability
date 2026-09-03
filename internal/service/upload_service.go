@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -46,17 +47,19 @@ type uploadService struct {
 	uploadRepo    repository.UploadRepository
 	userRepo      repository.UserRepository
 	minioCfg      config.MinIOConfig
-	initialOutbox interface {
-		EnqueueInitialTask(tasks.FileProcessingTask) error
-	}
-	produceTask func(tasks.FileProcessingTask) error
+	initialOutbox initialTaskOutbox
+}
+
+type initialTaskOutbox interface {
+	CompleteUploadAndEnqueueInitialTask(uploadRecordID uint, task tasks.FileProcessingTask) error
+	ClaimPendingInitialTasks(ctx context.Context, limit int, lease time.Duration) ([]model.PipelineTask, error)
+	MarkInitialTaskPublished(taskID uint, publicationAttempt int) error
+	MarkInitialTaskPublicationFailed(taskID uint, publicationAttempt int, lastError string) error
 }
 
 // NewUploadService creates an upload service.
-func NewUploadService(uploadRepo repository.UploadRepository, userRepo repository.UserRepository, minioCfg config.MinIOConfig, initialOutbox interface {
-	EnqueueInitialTask(tasks.FileProcessingTask) error
-}) UploadService {
-	return &uploadService{uploadRepo: uploadRepo, userRepo: userRepo, minioCfg: minioCfg, initialOutbox: initialOutbox, produceTask: kafka.ProduceFileTask}
+func NewUploadService(uploadRepo repository.UploadRepository, userRepo repository.UserRepository, minioCfg config.MinIOConfig, initialOutbox repository.PipelineTaskRepository) UploadService {
+	return &uploadService{uploadRepo: uploadRepo, userRepo: userRepo, minioCfg: minioCfg, initialOutbox: initialOutbox}
 }
 
 // CheckFile checks file.
@@ -254,20 +257,21 @@ func (s *uploadService) MergeChunks(ctx context.Context, fileMD5, fileName strin
 		return "", fmt.Errorf("failed to generate merged object url: %w", err)
 	}
 	task := tasks.FileProcessingTask{
-		FileMD5:   fileMD5,
-		ObjectURL: objectURL,
-		FileName:  fileName,
-		UserID:    userID,
-		OrgTag:    record.OrgTag,
-		IsPublic:  record.IsPublic,
-		Stage:     tasks.StageParse,
-		TraceID:   observability.TraceID(ctx),
+		FileMD5:         fileMD5,
+		ObjectURL:       objectURL,
+		FileName:        fileName,
+		UserID:          userID,
+		OrgTag:          record.OrgTag,
+		IsPublic:        record.IsPublic,
+		Stage:           tasks.StageParse,
+		TraceID:         observability.TraceID(ctx),
+		DocumentVersion: "upload:" + fileMD5,
 	}
-	if err := s.dispatchInitialTask(task); err != nil {
-		return "", err
+	if s.initialOutbox == nil {
+		return "", errors.New("initial pipeline outbox is not configured")
 	}
-	if err := s.uploadRepo.UpdateFileUploadStatus(record.ID, 1); err != nil {
-		return "", err
+	if err := s.initialOutbox.CompleteUploadAndEnqueueInitialTask(record.ID, task); err != nil {
+		return "", fmt.Errorf("complete upload and persist initial pipeline task: %w", err)
 	}
 
 	go func() {
@@ -280,21 +284,83 @@ func (s *uploadService) MergeChunks(ctx context.Context, fileMD5, fileName strin
 	return objectURL, nil
 }
 
-func (s *uploadService) dispatchInitialTask(task tasks.FileProcessingTask) error {
-	if s.initialOutbox == nil {
-		return errors.New("initial pipeline outbox is not configured")
+func dispatchInitialTasksOnce(
+	ctx context.Context,
+	outbox initialTaskOutbox,
+	produce func(tasks.FileProcessingTask) error,
+	batchSize int,
+	lease time.Duration,
+) (int, error) {
+	claimed, err := outbox.ClaimPendingInitialTasks(ctx, batchSize, lease)
+	if err != nil {
+		return 0, err
 	}
-	if err := s.initialOutbox.EnqueueInitialTask(task); err != nil {
-		return fmt.Errorf("persist initial pipeline task: %w", err)
+	published := 0
+	for _, row := range claimed {
+		var task tasks.FileProcessingTask
+		if err := json.Unmarshal([]byte(row.TaskPayload), &task); err != nil {
+			markErr := outbox.MarkInitialTaskPublicationFailed(row.ID, row.PublicationAttemptCount, "decode initial task: "+err.Error())
+			if markErr != nil {
+				return published, fmt.Errorf("decode initial task: %w; release publication claim: %v", err, markErr)
+			}
+			return published, fmt.Errorf("decode initial task: %w", err)
+		}
+		if err := produce(task); err != nil {
+			markErr := outbox.MarkInitialTaskPublicationFailed(row.ID, row.PublicationAttemptCount, err.Error())
+			if markErr != nil {
+				return published, fmt.Errorf("publish initial task: %w; release publication claim: %v", err, markErr)
+			}
+			return published, fmt.Errorf("publish initial task: %w", err)
+		}
+		if err := outbox.MarkInitialTaskPublished(row.ID, row.PublicationAttemptCount); err != nil {
+			return published, fmt.Errorf("mark initial task published: %w", err)
+		}
+		published++
 	}
-	producer := s.produceTask
-	if producer == nil {
-		producer = kafka.ProduceFileTask
+	return published, nil
+}
+
+// RunInitialTaskDispatcher drains durable initial pipeline tasks until cancellation.
+func RunInitialTaskDispatcher(ctx context.Context, outbox repository.PipelineTaskRepository, interval time.Duration) {
+	runInitialTaskDispatcher(ctx, outbox, func(task tasks.FileProcessingTask) error {
+		return kafka.ProduceFileTaskContext(ctx, task)
+	}, interval)
+}
+
+func runInitialTaskDispatcher(
+	ctx context.Context,
+	outbox initialTaskOutbox,
+	produce func(tasks.FileProcessingTask) error,
+	interval time.Duration,
+) {
+	if interval <= 0 {
+		interval = time.Second
 	}
-	if err := producer(task); err != nil {
-		return fmt.Errorf("publish initial pipeline task: %w", err)
+	drain := func() {
+		for {
+			published, err := dispatchInitialTasksOnce(ctx, outbox, produce, 20, time.Minute)
+			if err != nil {
+				if ctx.Err() == nil {
+					log.Warnf("initial task outbox dispatch failed: %v", err)
+				}
+				return
+			}
+			if published < 20 {
+				return
+			}
+		}
 	}
-	return nil
+	drain()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			drain()
+		}
+	}
 }
 
 // GetUploadStatus returns upload status.

@@ -2,6 +2,7 @@
 package repository
 
 import (
+	"context"
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
@@ -19,27 +20,149 @@ import (
 
 // EnqueueInitialTask durably records the complete initial payload before Kafka publication.
 func (r *pipelineTaskRepository) EnqueueInitialTask(task tasks.FileProcessingTask) error {
+	return enqueueInitialTask(r.db, task)
+}
+
+// CompleteUploadAndEnqueueInitialTask commits upload completion and initial pipeline acceptance atomically.
+func (r *pipelineTaskRepository) CompleteUploadAndEnqueueInitialTask(uploadRecordID uint, task tasks.FileProcessingTask) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&model.FileUpload{}).Where("id = ?", uploadRecordID).Update("status", 1)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errors.New("upload record not found")
+		}
+		return enqueueInitialTask(tx, task)
+	})
+}
+
+func enqueueInitialTask(db *gorm.DB, task tasks.FileProcessingTask) error {
 	documentVersion := strings.TrimSpace(task.DocumentVersion)
 	if documentVersion == "" {
 		documentVersion = "upload:" + task.FileMD5
 	}
+	task.DocumentVersion = documentVersion
 	payload, err := json.Marshal(task)
 	if err != nil {
 		return err
 	}
-	row, err := r.GetOrStart(task.FileMD5, documentVersion, string(task.Stage), "root")
+	txRepo := &pipelineTaskRepository{db: db}
+	row, err := txRepo.GetOrStart(task.FileMD5, documentVersion, string(task.Stage), "root")
 	if err != nil {
 		return err
 	}
-	return r.db.Model(row).Updates(map[string]any{
-		"task_payload":  string(payload),
-		"last_trace_id": strings.TrimSpace(task.TraceID),
-	}).Error
+	updates := map[string]any{
+		"task_payload":           string(payload),
+		"last_trace_id":          strings.TrimSpace(task.TraceID),
+		"publication_claimed_at": nil,
+		"publication_last_error": "",
+	}
+	if row.PublicationStatus != model.PipelinePublicationPublished {
+		updates["publication_status"] = model.PipelinePublicationPending
+	}
+	return db.Model(row).Updates(updates).Error
+}
+
+// ClaimPendingInitialTasks leases durable initial publications to one dispatcher.
+func (r *pipelineTaskRepository) ClaimPendingInitialTasks(ctx context.Context, limit int, lease time.Duration) ([]model.PipelineTask, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if lease <= 0 {
+		lease = time.Minute
+	}
+	now := time.Now()
+	expired := now.Add(-lease)
+	claimed := make([]model.PipelineTask, 0, limit)
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		query := tx.Where(
+			"task_payload <> '' AND (publication_status = ? OR (publication_status = ? AND publication_claimed_at <= ?))",
+			model.PipelinePublicationPending,
+			model.PipelinePublicationClaimed,
+			expired,
+		).Order("id asc").Limit(limit)
+		if tx.Dialector.Name() == "mysql" {
+			query = query.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
+		}
+		var candidates []model.PipelineTask
+		if err := query.Find(&candidates).Error; err != nil {
+			return err
+		}
+		for _, candidate := range candidates {
+			result := tx.Model(&model.PipelineTask{}).
+				Where(
+					"id = ? AND (publication_status = ? OR (publication_status = ? AND publication_claimed_at <= ?))",
+					candidate.ID,
+					model.PipelinePublicationPending,
+					model.PipelinePublicationClaimed,
+					expired,
+				).
+				Updates(map[string]any{
+					"publication_status":        model.PipelinePublicationClaimed,
+					"publication_claimed_at":    now,
+					"publication_attempt_count": gorm.Expr("publication_attempt_count + 1"),
+				})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 1 {
+				candidate.PublicationStatus = model.PipelinePublicationClaimed
+				candidate.PublicationClaimedAt = &now
+				candidate.PublicationAttemptCount++
+				claimed = append(claimed, candidate)
+			}
+		}
+		return nil
+	})
+	return claimed, err
+}
+
+// MarkInitialTaskPublished records Kafka acknowledgement for the active claim.
+func (r *pipelineTaskRepository) MarkInitialTaskPublished(taskID uint, publicationAttempt int) error {
+	now := time.Now()
+	result := r.db.Model(&model.PipelineTask{}).
+		Where("id = ? AND publication_status = ? AND publication_attempt_count = ?", taskID, model.PipelinePublicationClaimed, publicationAttempt).
+		Updates(map[string]any{
+			"publication_status":     model.PipelinePublicationPublished,
+			"publication_claimed_at": nil,
+			"publication_last_error": "",
+			"published_at":           &now,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("initial task publication claim is stale")
+	}
+	return nil
+}
+
+// MarkInitialTaskPublicationFailed releases a failed claim for automatic retry.
+func (r *pipelineTaskRepository) MarkInitialTaskPublicationFailed(taskID uint, publicationAttempt int, lastError string) error {
+	result := r.db.Model(&model.PipelineTask{}).
+		Where("id = ? AND publication_status = ? AND publication_attempt_count = ?", taskID, model.PipelinePublicationClaimed, publicationAttempt).
+		Updates(map[string]any{
+			"publication_status":     model.PipelinePublicationPending,
+			"publication_claimed_at": nil,
+			"publication_last_error": strings.TrimSpace(lastError),
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("initial task publication claim is stale")
+	}
+	return nil
 }
 
 // PipelineTaskRepository defines persistence operations for pipeline task data.
 type PipelineTaskRepository interface {
 	EnqueueInitialTask(task tasks.FileProcessingTask) error
+	CompleteUploadAndEnqueueInitialTask(uploadRecordID uint, task tasks.FileProcessingTask) error
+	ClaimPendingInitialTasks(ctx context.Context, limit int, lease time.Duration) ([]model.PipelineTask, error)
+	MarkInitialTaskPublished(taskID uint, publicationAttempt int) error
+	MarkInitialTaskPublicationFailed(taskID uint, publicationAttempt int, lastError string) error
 	GetOrStart(fileMD5, documentVersion, stage, windowID string) (*model.PipelineTask, error)
 	MarkProcessingByKey(fileMD5, documentVersion, stage, windowID string) (*model.PipelineTask, error)
 	MarkSuccessByKey(fileMD5, documentVersion, stage, windowID string) error
@@ -139,12 +262,17 @@ func (r *pipelineTaskRepository) MarkProcessingByKey(fileMD5, documentVersion, s
 	if err != nil {
 		return nil, err
 	}
-	task.Status = model.PipelineStatusProcessing
-	return task, r.db.Save(task).Error
+	if err := r.db.Model(task).Updates(map[string]any{
+		"status":        model.PipelineStatusProcessing,
+		"attempt_count": gorm.Expr("attempt_count + 1"),
+	}).Error; err != nil {
+		return nil, err
+	}
+	return r.GetOrStart(fileMD5, documentVersion, stage, windowID)
 }
 
 func (r *pipelineTaskRepository) MarkSuccessByKey(fileMD5, documentVersion, stage, windowID string) error {
-	task, err := r.MarkProcessingByKey(fileMD5, documentVersion, stage, windowID)
+	task, err := r.GetOrStart(fileMD5, documentVersion, stage, windowID)
 	if err != nil {
 		return err
 	}
@@ -155,7 +283,7 @@ func (r *pipelineTaskRepository) MarkSuccessByKey(fileMD5, documentVersion, stag
 }
 
 func (r *pipelineTaskRepository) MarkRetryByKey(fileMD5, documentVersion, stage, windowID, lastError string) (int, error) {
-	task, err := r.MarkProcessingByKey(fileMD5, documentVersion, stage, windowID)
+	task, err := r.GetOrStart(fileMD5, documentVersion, stage, windowID)
 	if err != nil {
 		return 0, err
 	}
@@ -168,7 +296,7 @@ func (r *pipelineTaskRepository) MarkRetryByKey(fileMD5, documentVersion, stage,
 }
 
 func (r *pipelineTaskRepository) MarkFailedByKey(fileMD5, documentVersion, stage, windowID, lastError string) error {
-	task, err := r.MarkProcessingByKey(fileMD5, documentVersion, stage, windowID)
+	task, err := r.GetOrStart(fileMD5, documentVersion, stage, windowID)
 	if err != nil {
 		return err
 	}
@@ -183,7 +311,7 @@ func (r *pipelineTaskRepository) MarkDeadLetterByKey(
 	if strings.TrimSpace(payload) == "" || strings.TrimSpace(messageID) == "" {
 		return errors.New("dead-letter payload and message ID are required")
 	}
-	task, err := r.MarkProcessingByKey(fileMD5, documentVersion, stage, windowID)
+	task, err := r.GetOrStart(fileMD5, documentVersion, stage, windowID)
 	if err != nil {
 		return err
 	}
@@ -265,17 +393,23 @@ func (r *pipelineTaskRepository) MarkProcessing(fileMD5, stage string, chunkID i
 			ChunkID:         chunkID,
 			Status:          model.PipelineStatusProcessing,
 			RetryCount:      0,
+			AttemptCount:    1,
 			IdempotencyKey:  buildPipelineKey(fileMD5, stage, chunkID),
 		}
 		return task, r.db.Create(task).Error
 	}
-	task.Status = model.PipelineStatusProcessing
-	return task, r.db.Save(task).Error
+	if err := r.db.Model(task).Updates(map[string]any{
+		"status":        model.PipelineStatusProcessing,
+		"attempt_count": gorm.Expr("attempt_count + 1"),
+	}).Error; err != nil {
+		return nil, err
+	}
+	return r.GetByKey(fileMD5, stage, chunkID)
 }
 
 // MarkSuccess handles mark success.
 func (r *pipelineTaskRepository) MarkSuccess(fileMD5, stage string, chunkID int) error {
-	task, err := r.MarkProcessing(fileMD5, stage, chunkID)
+	task, err := r.GetByKey(fileMD5, stage, chunkID)
 	if err != nil {
 		return err
 	}
@@ -286,7 +420,7 @@ func (r *pipelineTaskRepository) MarkSuccess(fileMD5, stage string, chunkID int)
 
 // MarkRetry handles mark retry.
 func (r *pipelineTaskRepository) MarkRetry(fileMD5, stage string, chunkID int, lastError string) (int, error) {
-	task, err := r.MarkProcessing(fileMD5, stage, chunkID)
+	task, err := r.GetByKey(fileMD5, stage, chunkID)
 	if err != nil {
 		return 0, err
 	}
@@ -300,7 +434,7 @@ func (r *pipelineTaskRepository) MarkRetry(fileMD5, stage string, chunkID int, l
 
 // MarkFailed handles mark failed.
 func (r *pipelineTaskRepository) MarkFailed(fileMD5, stage string, chunkID int, lastError string) error {
-	task, err := r.MarkProcessing(fileMD5, stage, chunkID)
+	task, err := r.GetByKey(fileMD5, stage, chunkID)
 	if err != nil {
 		return err
 	}

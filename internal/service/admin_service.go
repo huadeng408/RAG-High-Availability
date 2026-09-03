@@ -67,6 +67,37 @@ type PipelineReplayResult struct {
 	MessageIDs      []string    `json:"messageIds"`
 }
 
+// PipelineReplayErrorKind classifies replay failures for deterministic HTTP mapping.
+type PipelineReplayErrorKind string
+
+const (
+	PipelineReplayValidation     PipelineReplayErrorKind = "validation"
+	PipelineReplayNotFound       PipelineReplayErrorKind = "not_found"
+	PipelineReplayConflict       PipelineReplayErrorKind = "conflict"
+	PipelineReplayInfrastructure PipelineReplayErrorKind = "infrastructure"
+)
+
+// PipelineReplayError retains the public failure class and underlying cause.
+type PipelineReplayError struct {
+	Kind    PipelineReplayErrorKind
+	Message string
+	Cause   error
+}
+
+func (e *PipelineReplayError) Error() string {
+	if e.Cause != nil {
+		return e.Message + ": " + e.Cause.Error()
+	}
+	return e.Message
+}
+
+func (e *PipelineReplayError) Unwrap() error { return e.Cause }
+
+// NewPipelineReplayError builds a typed replay failure.
+func NewPipelineReplayError(kind PipelineReplayErrorKind, message string, cause error) error {
+	return &PipelineReplayError{Kind: kind, Message: message, Cause: cause}
+}
+
 // adminService implements admin operations.
 type adminService struct {
 	orgTagRepo       repository.OrgTagRepository
@@ -356,31 +387,34 @@ func (s *adminService) ReplayPipelineTask(fileMD5, documentVersion string, stage
 	windowID = strings.TrimSpace(windowID)
 	dlqMessageID = strings.TrimSpace(dlqMessageID)
 	if fileMD5 == "" {
-		return nil, errors.New("fileMd5 cannot be empty")
+		return nil, NewPipelineReplayError(PipelineReplayValidation, "fileMd5 cannot be empty", nil)
 	}
 	if documentVersion == "" {
-		return nil, errors.New("documentVersion cannot be empty")
+		return nil, NewPipelineReplayError(PipelineReplayValidation, "documentVersion cannot be empty", nil)
 	}
 	if windowID == "" {
-		return nil, errors.New("windowId cannot be empty")
+		return nil, NewPipelineReplayError(PipelineReplayValidation, "windowId cannot be empty", nil)
 	}
 	if dlqMessageID == "" {
-		return nil, errors.New("dlqMessageId cannot be empty")
+		return nil, NewPipelineReplayError(PipelineReplayValidation, "dlqMessageId cannot be empty", nil)
 	}
 	if stage == "" {
-		return nil, errors.New("stage cannot be empty")
+		return nil, NewPipelineReplayError(PipelineReplayValidation, "stage cannot be empty", nil)
 	}
 	if stage != tasks.StageParse && stage != tasks.StageChunk && stage != tasks.StageEmbed && stage != tasks.StageIndex {
-		return nil, fmt.Errorf("unsupported stage: %s", stage)
+		return nil, NewPipelineReplayError(PipelineReplayValidation, fmt.Sprintf("unsupported stage: %s", stage), nil)
 	}
 
 	uploadRecord, err := s.uploadRepo.GetFileUploadRecordByMD5(fileMD5)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, NewPipelineReplayError(PipelineReplayNotFound, "upload record not found", err)
+		}
+		return nil, NewPipelineReplayError(PipelineReplayInfrastructure, "load upload record", err)
 	}
 	failedTasks, err := s.pipelineTaskRepo.ListFailedByFile(fileMD5)
 	if err != nil {
-		return nil, err
+		return nil, NewPipelineReplayError(PipelineReplayInfrastructure, "list failed pipeline tasks", err)
 	}
 	result := &PipelineReplayResult{
 		FileMD5: fileMD5, DocumentVersion: documentVersion, Stage: stage, WindowID: windowID,
@@ -396,10 +430,10 @@ func (s *adminService) ReplayPipelineTask(fileMD5, documentVersion string, stage
 		}
 		var task tasks.FileProcessingTask
 		if err := json.Unmarshal([]byte(failed.DLQPayload), &task); err != nil {
-			return result, fmt.Errorf("decode DLQ payload %s: %w", failed.DLQMessageID, err)
+			return result, NewPipelineReplayError(PipelineReplayConflict, fmt.Sprintf("decode DLQ payload %s", failed.DLQMessageID), err)
 		}
 		if task.DLQID != dlqMessageID || task.FileMD5 != fileMD5 || task.DocumentVersion != documentVersion || task.Stage != stage || task.WindowID != windowID {
-			return result, fmt.Errorf("DLQ payload identity does not match selected task %s", dlqMessageID)
+			return result, NewPipelineReplayError(PipelineReplayConflict, fmt.Sprintf("DLQ payload identity does not match selected task %s", dlqMessageID), nil)
 		}
 		task.FileMD5 = uploadRecord.FileMD5
 		task.FileName = uploadRecord.FileName
@@ -416,7 +450,7 @@ func (s *adminService) ReplayPipelineTask(fileMD5, documentVersion string, stage
 		if err := s.pipelineTaskRepo.ResetForReplayByKey(
 			fileMD5, failed.DocumentVersion, failed.Stage, failed.WindowID,
 		); err != nil {
-			return result, err
+			return result, NewPipelineReplayError(PipelineReplayConflict, "dead-letter task is stale or already replayed", err)
 		}
 		if err := producer(task); err != nil {
 			restoreErr := s.pipelineTaskRepo.MarkDeadLetterByKey(
@@ -429,15 +463,15 @@ func (s *adminService) ReplayPipelineTask(fileMD5, documentVersion string, stage
 				failed.DLQMessageID,
 			)
 			if restoreErr != nil {
-				return result, fmt.Errorf("publish replay: %w; restore dead letter: %v", err, restoreErr)
+				return result, NewPipelineReplayError(PipelineReplayInfrastructure, fmt.Sprintf("publish replay; restore dead letter: %v", restoreErr), err)
 			}
-			return result, fmt.Errorf("publish replay: %w", err)
+			return result, NewPipelineReplayError(PipelineReplayInfrastructure, "publish replay", err)
 		}
 		result.ReplayedTasks++
 		result.MessageIDs = append(result.MessageIDs, failed.DLQMessageID)
 	}
 	if result.ReplayedTasks == 0 {
-		return nil, fmt.Errorf("no replayable %s dead-letter task found for file %s", stage, fileMD5)
+		return nil, NewPipelineReplayError(PipelineReplayNotFound, fmt.Sprintf("no replayable %s dead-letter task found for file %s", stage, fileMD5), nil)
 	}
 	return result, nil
 }

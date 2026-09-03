@@ -226,7 +226,7 @@ python scripts/verify_langgraph_stack.py \
 bash scripts/run_rha_e2e.sh
 ```
 
-验收报告写入 `benchmarks/results/rha-e2e.json`，并生成绑定 runner 与报告 SHA-256 的 provenance sidecar。Schema-v4 默认校验两段上传恢复、四阶段入库、PDF/Word/PPT/Excel/图片共 57 个带定位的版本化 EvidenceUnit、Alias v2 到新 v3 探针的切换与回滚、引用式流式回答，以及一次真实 Kafka DLQ 精确重放。它还验证 BM25/Reranker 降级、权限隔离、持久记忆、逐请求与逐 WebSocket stream 的 trace 连续性和精确 11 节点图。该报告使用确定性本地模型/OCR/MinerU 服务，只用于功能验收，不代表生产模型效果或吞吐性能。
+验收报告写入 `benchmarks/results/rha-e2e.json`，并生成绑定 runner 与报告精确字节的 SHA-256 integrity sidecar。该绑定用于发现文件变化，不认证报告来源；发布验收仍必须执行一次全新的 Docker runtime run。Schema-v4 默认校验两段上传恢复、四阶段入库、PDF/Word/PPT/Excel/图片共 57 个带定位的版本化 EvidenceUnit、Alias v2 到新 v3 探针的切换与回滚、引用式流式回答，以及一次真实 Kafka DLQ 精确重放。它还验证 BM25/Reranker 降级、权限隔离、持久记忆、逐请求与逐 WebSocket stream 的 trace 连续性和精确 11 节点图。该报告使用确定性本地模型/OCR/MinerU 服务，只用于功能验收，不代表生产模型效果或吞吐性能。
 
 完整发布门禁会重算离线 Recall@K、MRR 和 nDCG@K，调用 runtime E2E 校验器，并检查 tracked secret 与运行时产物策略：
 

@@ -56,9 +56,16 @@ func ensurePipelineTaskSchema() error {
 	}{
 		{name: "document_version", definition: "VARCHAR(96) NULL"},
 		{name: "window_id", definition: "VARCHAR(64) NULL"},
+		{name: "retry_count", definition: "INT NOT NULL DEFAULT 0"},
 		{name: "error_class", definition: "VARCHAR(32) NULL"},
 		{name: "last_trace_id", definition: "VARCHAR(128) NULL"},
 		{name: "task_payload", definition: "LONGTEXT NULL"},
+		{name: "attempt_count", definition: "INT NOT NULL DEFAULT 0"},
+		{name: "publication_status", definition: "VARCHAR(20) NOT NULL DEFAULT ''"},
+		{name: "publication_attempt_count", definition: "INT NOT NULL DEFAULT 0"},
+		{name: "publication_claimed_at", definition: "TIMESTAMP NULL"},
+		{name: "published_at", definition: "TIMESTAMP NULL"},
+		{name: "publication_last_error", definition: "TEXT NULL"},
 	}
 	for _, column := range columns {
 		if DB.Migrator().HasColumn(table, column.name) {
@@ -85,6 +92,16 @@ func ensurePipelineTaskSchema() error {
 	).Error; err != nil {
 		return fmt.Errorf("backfill pipeline window: %w", err)
 	}
+	if err := DB.Exec(
+		"UPDATE pipeline_task SET attempt_count = retry_count + CASE WHEN status = 'PENDING' THEN 0 ELSE 1 END WHERE attempt_count = 0",
+	).Error; err != nil {
+		return fmt.Errorf("backfill pipeline attempt count: %w", err)
+	}
+	if err := DB.Exec(
+		"UPDATE pipeline_task SET publication_status = 'PENDING' WHERE task_payload IS NOT NULL AND task_payload <> '' AND publication_status = ''",
+	).Error; err != nil {
+		return fmt.Errorf("backfill pipeline publication status: %w", err)
+	}
 
 	if DB.Migrator().HasIndex(table, "uk_pipeline_file_stage_chunk") {
 		if err := DB.Migrator().DropIndex(table, "uk_pipeline_file_stage_chunk"); err != nil {
@@ -100,7 +117,7 @@ func ensurePipelineTaskSchema() error {
 	}
 	if DB.Dialector.Name() == "mysql" {
 		if err := DB.Exec(
-			"ALTER TABLE pipeline_task MODIFY COLUMN document_version VARCHAR(96) NOT NULL, MODIFY COLUMN window_id VARCHAR(64) NOT NULL, MODIFY COLUMN idempotency_key CHAR(64) NOT NULL",
+			"ALTER TABLE pipeline_task MODIFY COLUMN document_version VARCHAR(96) NOT NULL, MODIFY COLUMN window_id VARCHAR(64) NOT NULL, MODIFY COLUMN idempotency_key VARCHAR(255) NOT NULL",
 		).Error; err != nil {
 			return fmt.Errorf("enforce versioned pipeline identity columns: %w", err)
 		}

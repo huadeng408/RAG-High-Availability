@@ -97,6 +97,37 @@ func TestMarkRetryByKeyPersistsNextAttemptAndFinalError(t *testing.T) {
 	}
 }
 
+func TestAttemptCountIncrementsOnlyWhenProcessingActuallyStarts(t *testing.T) {
+	repo := newSQLitePipelineTaskRepo(t)
+	if _, err := repo.MarkProcessingByKey("file-1", "version-1", "parse", "root"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.MarkRetryByKey("file-1", "version-1", "parse", "root", "temporary"); err != nil {
+		t.Fatal(err)
+	}
+	first, err := repo.GetOrStart("file-1", "version-1", "parse", "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.AttemptCount != 1 {
+		t.Fatalf("attempt count after one processing start = %d, want 1", first.AttemptCount)
+	}
+
+	if _, err := repo.MarkProcessingByKey("file-1", "version-1", "parse", "root"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkSuccessByKey("file-1", "version-1", "parse", "root"); err != nil {
+		t.Fatal(err)
+	}
+	second, err := repo.GetOrStart("file-1", "version-1", "parse", "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.AttemptCount != 2 {
+		t.Fatalf("attempt count after two processing starts = %d, want 2", second.AttemptCount)
+	}
+}
+
 func TestAttemptMetadataPersistsLatestTraceAndTypedFailure(t *testing.T) {
 	repo := newSQLitePipelineTaskRepo(t)
 	if err := repo.RecordAttemptMetadata("file-1", "version-1", "embed", "window-1", "trace-new", "dependency"); err != nil {

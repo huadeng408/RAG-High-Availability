@@ -213,13 +213,15 @@ class VerifyRhaReleaseTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "runtime.json"
             path.write_text(json.dumps(report), encoding="utf-8")
-            provenance = {
-                "kind": "rha-runtime-runner-provenance",
+            integrity = {
+                "kind": "rha-runtime-runner-integrity-binding",
                 "runner": "scripts/rha_runtime_e2e.py",
                 "reportSha256": MODULE.hashlib.sha256(path.read_bytes()).hexdigest(),
                 "runnerSha256": MODULE.hashlib.sha256((ROOT / "scripts" / "rha_runtime_e2e.py").read_bytes()).hexdigest(),
+                "freshDockerRunRequired": True,
+                "assurance": "sha256-integrity-only",
             }
-            path.with_suffix(path.suffix + ".provenance.json").write_text(json.dumps(provenance), encoding="utf-8")
+            path.with_suffix(path.suffix + ".integrity.json").write_text(json.dumps(integrity), encoding="utf-8")
             with patch.object(MODULE, "run_runtime_verifier") as verifier:
                 MODULE.verify_runtime_report(path)
                 verifier.assert_called_once_with(path)
@@ -233,12 +235,12 @@ class VerifyRhaReleaseTest(unittest.TestCase):
                     MODULE.verify_runtime_report(path)
                 verifier.assert_not_called()
 
-    def test_runtime_gate_rejects_hand_written_report_without_runner_provenance(self) -> None:
+    def test_runtime_gate_rejects_report_without_runner_integrity_binding(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "runtime.json"
             path.write_text(json.dumps({"reportKind": "rha-runtime-e2e", "schemaVersion": 4, "reliability": {}}), encoding="utf-8")
             with patch.object(MODULE, "run_runtime_verifier"):
-                with self.assertRaisesRegex(ValueError, "runner provenance"):
+                with self.assertRaisesRegex(ValueError, "runner integrity"):
                     MODULE.verify_runtime_report(path)
 
     def test_secret_scan_failure_is_not_accepted_as_boolean_evidence(self) -> None:

@@ -290,16 +290,18 @@ def verify_runtime_report(path: Path) -> dict[str, Any]:
         raise ValueError("runtime E2E reliability evidence is required")
     if _contains_fixture_marker(report):
         raise ValueError("fixture/synthetic report cannot be presented as runtime E2E")
-    provenance_path = path.with_suffix(path.suffix + ".provenance.json")
-    if not provenance_path.is_file():
-        raise ValueError("runner provenance sidecar is required")
-    provenance = load_json(provenance_path)
-    if provenance.get("kind") != "rha-runtime-runner-provenance" or provenance.get("runner") != "scripts/rha_runtime_e2e.py":
-        raise ValueError("runner provenance identity is invalid")
+    integrity_path = path.with_suffix(path.suffix + ".integrity.json")
+    if not integrity_path.is_file():
+        raise ValueError("runner integrity sidecar is required")
+    integrity = load_json(integrity_path)
+    if integrity.get("kind") != "rha-runtime-runner-integrity-binding" or integrity.get("runner") != "scripts/rha_runtime_e2e.py":
+        raise ValueError("runner integrity identity is invalid")
+    if integrity.get("freshDockerRunRequired") is not True or integrity.get("assurance") != "sha256-integrity-only":
+        raise ValueError("runner integrity sidecar must state its integrity-only assurance and fresh Docker requirement")
     report_digest = hashlib.sha256(path.read_bytes()).hexdigest()
     runner_digest = hashlib.sha256((ROOT / "scripts" / "rha_runtime_e2e.py").read_bytes()).hexdigest()
-    if provenance.get("reportSha256") != report_digest or provenance.get("runnerSha256") != runner_digest:
-        raise ValueError("runner provenance digest mismatch")
+    if integrity.get("reportSha256") != report_digest or integrity.get("runnerSha256") != runner_digest:
+        raise ValueError("runner integrity digest mismatch")
     run_runtime_verifier(path)
     return report
 
@@ -358,7 +360,7 @@ def main() -> int:
     except ValueError as exc:
         print(f"RHA release verification failed: {exc}", file=sys.stderr)
         return 1
-    print("RHA release verified: offline metrics, runtime schema-v4 E2E, tracked artifact policy, and secret scan")
+    print("RHA release verified: offline metrics, integrity-bound runtime schema-v4 report, tracked artifact policy, and secret scan; a fresh Docker run remains mandatory")
     return 0
 
 

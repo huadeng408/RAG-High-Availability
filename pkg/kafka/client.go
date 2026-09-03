@@ -3,6 +3,9 @@ package kafka
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -234,10 +237,15 @@ func produceByLeaderDial(ctx context.Context, topic string, taskBytes []byte) er
 
 // ProduceFileTask enqueues the first stage of the pipeline (parse).
 func ProduceFileTask(task tasks.FileProcessingTask) error {
+	return ProduceFileTaskContext(context.Background(), task)
+}
+
+// ProduceFileTaskContext enqueues the first stage while honoring caller cancellation.
+func ProduceFileTaskContext(ctx context.Context, task tasks.FileProcessingTask) error {
 	if task.Stage == "" {
 		task.Stage = tasks.StageParse
 	}
-	return produceToTopic(context.Background(), topicByStage(task.Stage), task)
+	return produceToTopic(ctx, topicByStage(task.Stage), task)
 }
 
 // ProduceTask handles produce task.
@@ -252,14 +260,40 @@ func ProduceTaskToDLQ(task tasks.FileProcessingTask) error {
 
 // ProduceRawToDLQ durably hands off a malformed Kafka payload without attempting to decode it.
 func ProduceRawToDLQ(payload []byte) error {
-	return produceBytesToTopic(context.Background(), topics.dlq, payload)
+	envelope, err := malformedDeadLetterPayload(payload)
+	if err != nil {
+		return err
+	}
+	return produceBytesToTopic(context.Background(), topics.dlq, envelope)
 }
 
 func handleMalformedMessage(payload []byte, publish func([]byte) error, commit func() error) error {
-	if err := publish(payload); err != nil {
+	envelope, err := malformedDeadLetterPayload(payload)
+	if err != nil {
+		return err
+	}
+	if err := publish(envelope); err != nil {
 		return err
 	}
 	return commit()
+}
+
+type malformedDeadLetter struct {
+	Kind          string `json:"kind"`
+	DLQID         string `json:"dlq_id"`
+	PayloadSHA256 string `json:"payload_sha256"`
+	PayloadBase64 string `json:"payload_base64"`
+}
+
+func malformedDeadLetterPayload(payload []byte) ([]byte, error) {
+	digest := sha256.Sum256(payload)
+	identity := hex.EncodeToString(digest[:])
+	return json.Marshal(malformedDeadLetter{
+		Kind:          "malformed-kafka-message",
+		DLQID:         identity,
+		PayloadSHA256: identity,
+		PayloadBase64: base64.StdEncoding.EncodeToString(payload),
+	})
 }
 
 func handleSuccessfulMessage(markSuccess func() error, commit func() error) error {

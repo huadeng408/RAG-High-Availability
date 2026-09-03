@@ -227,7 +227,7 @@ func aggregatePipelineStage(stage string, tasks []model.PipelineTask) PipelineSt
 		return result
 	}
 	for _, task := range tasks {
-		result.AttemptCount += task.RetryCount + 1
+		result.AttemptCount += task.AttemptCount
 	}
 	latest := tasks[0]
 	latestDeadLetter := tasks[0]

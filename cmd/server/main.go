@@ -138,11 +138,11 @@ func main() {
 		evidenceRepo,
 		ingestionClient,
 	)
+	appCtx, cancelApp := context.WithCancel(context.Background())
+	defer cancelApp()
 	go kafka.StartPipelineConsumers(cfg.Kafka, processor, pipelineTaskRepo)
-
-	initCtx, cancelInit := context.WithCancel(context.Background())
-	defer cancelInit()
-	go initSeedFiles(initCtx, "initfile", userRepository, uploadService)
+	go service.RunInitialTaskDispatcher(appCtx, pipelineTaskRepo, time.Second)
+	go initSeedFiles(appCtx, "initfile", userRepository, uploadService)
 
 	gin.SetMode(cfg.Server.Mode)
 	r := gin.New()
@@ -271,6 +271,7 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	log.Info("shutdown signal received")
+	cancelApp()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

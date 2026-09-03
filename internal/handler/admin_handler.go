@@ -2,6 +2,7 @@
 package handler
 
 import (
+	"errors"
 	"github.com/huadeng408/RAG-High-Availability/internal/service"
 	"github.com/huadeng408/RAG-High-Availability/pkg/log"
 	"github.com/huadeng408/RAG-High-Availability/pkg/tasks"
@@ -249,7 +250,21 @@ func (h *AdminHandler) ReplayPipelineTask(c *gin.Context) {
 		req.DLQMessageID,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": err.Error(), "data": nil})
+		status := http.StatusInternalServerError
+		var replayErr *service.PipelineReplayError
+		if errors.As(err, &replayErr) {
+			switch replayErr.Kind {
+			case service.PipelineReplayValidation:
+				status = http.StatusBadRequest
+			case service.PipelineReplayNotFound:
+				status = http.StatusNotFound
+			case service.PipelineReplayConflict:
+				status = http.StatusConflict
+			case service.PipelineReplayInfrastructure:
+				status = http.StatusServiceUnavailable
+			}
+		}
+		c.JSON(status, gin.H{"code": status, "message": err.Error(), "data": nil})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": http.StatusOK, "message": "已提交重放任务", "data": result})

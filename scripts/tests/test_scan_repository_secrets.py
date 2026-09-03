@@ -34,6 +34,32 @@ class SecretScannerTests(unittest.TestCase):
             source.write_text("password: ${RHA_PASSWORD}\ntoken: not-needed\napi_key: <your-key>\n", encoding="utf-8")
             self.assertEqual([], scanner.scan(root, [source]))
 
+    def test_rejects_unquoted_compound_credential_assignments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "unsafe.env"
+            source.write_text(
+                "app_password=actual-value-123\n"
+                "jwt_secret: signing-secret-456\n"
+                "access_token = token-value-789\n",
+                encoding="utf-8",
+            )
+            findings = scanner.scan(root, [source])
+        self.assertEqual(3, sum("credential assignment" in item for item in findings))
+
+    def test_allows_unquoted_environment_lookups_comments_and_prose(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "safe.txt"
+            source.write_text(
+                "jwt_secret: ${RHA_JWT_SECRET}\n"
+                "access_token = $env:RHA_ACCESS_TOKEN\n"
+                "# password: documented-example-123\n"
+                "Rotate the access token before production deployment.\n",
+                encoding="utf-8",
+            )
+            self.assertEqual([], scanner.scan(root, [source]))
+
 
 if __name__ == "__main__":
     unittest.main()

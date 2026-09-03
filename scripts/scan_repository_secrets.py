@@ -26,8 +26,13 @@ PROVIDER_PATTERNS = (
 )
 JWT_PATTERN = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")
 ASSIGNMENT_PATTERN = re.compile(
-    r"(?im)^\s*[\"']?(?P<key>password|passwd|pwd|token|api[_-]?key|secret)[\"']?\s*[:=]\s*(?P<quote>[\"'])(?P<value>[^\"']+)(?P=quote)"
+    r'''(?im)^[ \t]*(?![#;])["']?(?P<key>[A-Za-z_][A-Za-z0-9_.-]*)["']?[ \t]*[:=][ \t]*'''
+    r'''(?P<value>"[^"\r\n]*"|'[^'\r\n]*'|[^#;\r\n]*?)[ \t]*(?:[#;].*)?$'''
 )
+CREDENTIAL_KEY_PATTERN = re.compile(
+    r"(?i)(?:^|[_.-])(?:password|passwd|pwd|token|secret|api[_-]?key)(?:$|[_.-])"
+)
+UNQUOTED_ASSIGNMENT_SUFFIXES = {".env", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".properties", ".txt"}
 
 
 def _documented_placeholder(value: str) -> bool:
@@ -41,12 +46,21 @@ def _documented_placeholder(value: str) -> bool:
 
 
 def _credential_shaped_assignment(key: str, value: str) -> bool:
+    if not CREDENTIAL_KEY_PATTERN.search(key):
+        return False
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        value = value[1:-1].strip()
     if _documented_placeholder(value) or value.startswith("#"):
         return False
     normalized_key = key.lower().replace("-", "_")
     if normalized_key in {"password", "passwd", "pwd"}:
         return len(value) >= 6
     return len(value) >= 12 and any(character.isalpha() for character in value) and any(character.isdigit() for character in value)
+
+
+def _allows_unquoted_assignments(path: Path) -> bool:
+    return path.suffix.lower() in UNQUOTED_ASSIGNMENT_SUFFIXES or path.name.lower().startswith(".env")
 
 
 def tracked_paths(root: Path) -> list[Path]:
@@ -77,6 +91,10 @@ def scan(root: Path, paths: list[Path]) -> list[str]:
             line = content.count("\n", 0, jwt_match.start()) + 1
             findings.append(f"{path.relative_to(root)}:{line}: JWT-like token")
         for match in ASSIGNMENT_PATTERN.finditer(content):
+            raw_value = match.group("value").strip()
+            is_quoted = len(raw_value) >= 2 and raw_value[0] == raw_value[-1] and raw_value[0] in {'"', "'"}
+            if not is_quoted and not _allows_unquoted_assignments(path):
+                continue
             if not _credential_shaped_assignment(match.group("key"), match.group("value")):
                 continue
             line = content.count("\n", 0, match.start()) + 1

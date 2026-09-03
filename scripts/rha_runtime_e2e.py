@@ -490,6 +490,77 @@ def _connect_websocket(url: str, *, timeout: float, header: list[str]) -> Any:
     return websocket.create_connection(url, timeout=timeout, header=header)
 
 
+def exercise_alias_migration(
+    elasticsearch: RuntimeHTTPClient,
+    alias_name: str,
+    run_suffix: str,
+) -> tuple[HTTPResponse, list[str], dict[str, Any]]:
+    alias_response = elasticsearch.request_json(
+        "GET",
+        "/_alias/" + quote(alias_name, safe=""),
+    )
+    alias_indices = sorted(
+        index_name
+        for index_name, index_data in alias_response.body.items()
+        if isinstance(index_data, dict)
+        and alias_name in (index_data.get("aliases") or {})
+    )
+    if not alias_indices:
+        raise RuntimeError(f"Elasticsearch alias {alias_name} has no active index")
+    if len(alias_indices) != 1:
+        raise RuntimeError(f"Elasticsearch alias {alias_name} must have exactly one active index")
+
+    previous_index = alias_indices[0]
+    mapping_response = elasticsearch.request_json("GET", "/" + quote(previous_index, safe="") + "/_mapping")
+    previous_mapping = ((mapping_response.body.get(previous_index) or {}).get("mappings") or {})
+    properties = previous_mapping.get("properties") or {}
+    if "text_content" not in properties or "vector" not in properties:
+        raise RuntimeError("active knowledge index mapping is missing text_content/vector")
+    probe_index = f"rha-knowledge-v3-probe-{run_suffix}"
+    elasticsearch.request_json("PUT", "/" + quote(probe_index, safe=""), {"mappings": previous_mapping})
+    switched_indices: list[str] = []
+    rollback_indices: list[str] = []
+    readback_verified = False
+    switched_alias = False
+    try:
+        elasticsearch.request_json("POST", "/_aliases", {"actions": [
+            {"remove": {"index": "*", "alias": alias_name, "must_exist": False}},
+            {"add": {"index": probe_index, "alias": alias_name}},
+        ]})
+        switched_alias = True
+        switched = elasticsearch.request_json("GET", "/_alias/" + quote(alias_name, safe=""))
+        switched_indices = sorted(switched.body)
+        if switched_indices != [probe_index]:
+            raise RuntimeError(f"alias probe switch readback mismatch: {switched_indices}")
+        probe_id = "alias-probe-" + run_suffix
+        elasticsearch.request_json("PUT", "/" + quote(alias_name, safe="") + "/_doc/" + probe_id + "?refresh=true", {
+            "text_content": "alias migration readback " + run_suffix,
+            "vector": [1.0] + [0.0] * 7,
+        })
+        readback = elasticsearch.request_json("GET", "/" + quote(alias_name, safe="") + "/_doc/" + probe_id)
+        readback_verified = bool((readback.body or {}).get("found"))
+        if not readback_verified:
+            raise RuntimeError("alias probe document readback failed")
+    finally:
+        if switched_alias:
+            elasticsearch.request_json("POST", "/_aliases", {"actions": [
+                {"remove": {"index": "*", "alias": alias_name, "must_exist": False}},
+                {"add": {"index": previous_index, "alias": alias_name}},
+            ]})
+            rollback = elasticsearch.request_json("GET", "/_alias/" + quote(alias_name, safe=""))
+            rollback_indices = sorted(rollback.body)
+            if rollback_indices != [previous_index]:
+                raise RuntimeError(f"alias rollback readback mismatch: {rollback_indices}")
+    return alias_response, alias_indices, {
+        "previousIndex": previous_index,
+        "newIndex": probe_index,
+        "mappingVerified": True,
+        "readbackVerified": readback_verified,
+        "switchedIndices": switched_indices,
+        "rollbackIndices": rollback_indices,
+    }
+
+
 def run_runtime(
     args: argparse.Namespace,
     *,
@@ -645,54 +716,9 @@ def run_runtime(
         trace_id,
         timeout_seconds=args.request_timeout,
     )
-    alias_response = elasticsearch.request_json(
-        "GET",
-        "/_alias/" + quote(alias_name, safe=""),
+    alias_response, alias_indices, alias_migration = exercise_alias_migration(
+        elasticsearch, alias_name, run_suffix
     )
-    alias_indices = sorted(
-        index_name
-        for index_name, index_data in alias_response.body.items()
-        if isinstance(index_data, dict)
-        and alias_name in (index_data.get("aliases") or {})
-    )
-    if not alias_indices:
-        raise RuntimeError(f"Elasticsearch alias {alias_name} has no active index")
-    if len(alias_indices) != 1:
-        raise RuntimeError(f"Elasticsearch alias {alias_name} must have exactly one active index")
-
-    previous_index = alias_indices[0]
-    mapping_response = elasticsearch.request_json("GET", "/" + quote(previous_index, safe="") + "/_mapping")
-    previous_mapping = ((mapping_response.body.get(previous_index) or {}).get("mappings") or {})
-    properties = previous_mapping.get("properties") or {}
-    if "text_content" not in properties or "vector" not in properties:
-        raise RuntimeError("active knowledge index mapping is missing text_content/vector")
-    probe_index = f"rha-knowledge-v3-probe-{run_suffix}"
-    elasticsearch.request_json("PUT", "/" + quote(probe_index, safe=""), {"mappings": previous_mapping})
-    elasticsearch.request_json("POST", "/_aliases", {"actions": [
-        {"remove": {"index": "*", "alias": alias_name, "must_exist": False}},
-        {"add": {"index": probe_index, "alias": alias_name}},
-    ]})
-    switched = elasticsearch.request_json("GET", "/_alias/" + quote(alias_name, safe=""))
-    switched_indices = sorted(switched.body)
-    probe_id = "alias-probe-" + run_suffix
-    elasticsearch.request_json("PUT", "/" + quote(alias_name, safe="") + "/_doc/" + probe_id + "?refresh=true", {
-        "text_content": "alias migration readback " + run_suffix,
-        "vector": [1.0] + [0.0] * 7,
-    })
-    readback = elasticsearch.request_json("GET", "/" + quote(alias_name, safe="") + "/_doc/" + probe_id)
-    elasticsearch.request_json("POST", "/_aliases", {"actions": [
-        {"remove": {"index": "*", "alias": alias_name, "must_exist": False}},
-        {"add": {"index": previous_index, "alias": alias_name}},
-    ]})
-    rollback = elasticsearch.request_json("GET", "/_alias/" + quote(alias_name, safe=""))
-    alias_migration = {
-        "previousIndex": previous_index,
-        "newIndex": probe_index,
-        "mappingVerified": True,
-        "readbackVerified": bool((readback.body or {}).get("found")),
-        "switchedIndices": switched_indices,
-        "rollbackIndices": sorted(rollback.body),
-    }
 
     modality_paths = {
         "ppt": (upload, pipeline),
@@ -1080,15 +1106,17 @@ def run_runtime(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     report_bytes = (json.dumps(report, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     output_path.write_bytes(report_bytes)
-    provenance_path = output_path.with_suffix(output_path.suffix + ".provenance.json")
-    provenance = {
-        "kind": "rha-runtime-runner-provenance",
+    integrity_path = output_path.with_suffix(output_path.suffix + ".integrity.json")
+    integrity = {
+        "kind": "rha-runtime-runner-integrity-binding",
         "reportSha256": hashlib.sha256(report_bytes).hexdigest(),
         "runnerSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "runner": "scripts/rha_runtime_e2e.py",
         "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "freshDockerRunRequired": True,
+        "assurance": "sha256-integrity-only",
     }
-    provenance_path.write_text(json.dumps(provenance, sort_keys=True) + "\n", encoding="utf-8")
+    integrity_path.write_text(json.dumps(integrity, sort_keys=True) + "\n", encoding="utf-8")
     return 0
 
 
