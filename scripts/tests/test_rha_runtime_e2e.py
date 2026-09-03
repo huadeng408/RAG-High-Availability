@@ -877,6 +877,78 @@ class RuntimeE2ETest(unittest.TestCase):
                 "PUBLISHED\t3\t1\t2026-09-03 11:00:56.920\t\n"
             )
 
+    def test_memory_index_state_waits_for_failed_attempt_and_automatic_recovery(self) -> None:
+        runtime = load_runtime_module()
+        before_rows = iter(
+            [
+                [],
+                ["CLAIMED", "1", "1", "0", "0", "0"],
+                ["PENDING", "1", "0", "1", "1", "0"],
+            ]
+        )
+
+        before, before_polls = runtime.wait_for_memory_index_state(
+            lambda: next(before_rows),
+            phase="before-recovery",
+            timeout_seconds=1,
+            poll_interval=0,
+        )
+        after_rows = iter(
+            [
+                ["PENDING", "1", "0", "1", "1", "0"],
+                ["INDEXED", "2", "0", "0", "0", "1"],
+            ]
+        )
+        after, after_polls = runtime.wait_for_memory_index_state(
+            lambda: next(after_rows),
+            phase="after-recovery",
+            previous_attempt_count=before["attemptCount"],
+            timeout_seconds=1,
+            poll_interval=0,
+        )
+
+        self.assertEqual(before_polls, 3)
+        self.assertEqual(before["status"], "PENDING")
+        self.assertEqual(before["attemptCount"], 1)
+        self.assertTrue(before["lastErrorPresent"])
+        self.assertEqual(after_polls, 2)
+        self.assertEqual(after["status"], "INDEXED")
+        self.assertEqual(after["attemptCount"], 2)
+        self.assertTrue(after["indexed"])
+
+    def test_memory_mapping_readback_requires_dense_vector(self) -> None:
+        runtime = load_runtime_module()
+
+        class ElasticsearchClient:
+            def __init__(self, vector_type: str, dimensions: int = 8) -> None:
+                self.vector_type = vector_type
+                self.dimensions = dimensions
+
+            def request_json(self, method, path, payload=None):
+                self.request = (method, path, payload)
+                return SimpleNamespace(body={
+                    "conversation_memory": {
+                        "mappings": {"properties": {"vector": {
+                            "type": self.vector_type,
+                            "dims": self.dimensions,
+                        }}}
+                    }
+                })
+
+        client = ElasticsearchClient("dense_vector")
+        mapping = runtime.read_memory_index_mapping(client, "conversation_memory")
+        self.assertEqual(client.request, ("GET", "/conversation_memory/_mapping", None))
+        self.assertEqual(mapping, {
+            "index": "conversation_memory",
+            "vectorType": "dense_vector",
+            "dimensions": 8,
+        })
+
+        with self.assertRaisesRegex(RuntimeError, "dense_vector"):
+            runtime.read_memory_index_mapping(ElasticsearchClient("float"), "conversation_memory")
+        with self.assertRaisesRegex(RuntimeError, "dimensions"):
+            runtime.read_memory_index_mapping(ElasticsearchClient("dense_vector", 7), "conversation_memory")
+
     def test_before_recovery_outbox_polling_is_positive_and_below_retry_interval(self) -> None:
         runtime = load_runtime_module()
 

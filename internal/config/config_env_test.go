@@ -16,3 +16,18 @@ func TestExpandEnvironmentPlaceholdersRemovesTrackedCredentialDefaults(t *testin
 	}
 	os.Unsetenv("RHA_TEST_PASSWORD")
 }
+
+func TestNormalizeMemoryConfigAppliesIndexDefaultsBeforeStartup(t *testing.T) {
+	got := NormalizeMemoryConfig(MemoryConfig{Enabled: true})
+	if got.MemoryIndexName != "conversation_memory" {
+		t.Fatalf("memory index name = %q, want conversation_memory", got.MemoryIndexName)
+	}
+	if got.LongTermTopK != 4 || got.ContextTopK != 6 || got.LongTermMinImportance != 0.45 {
+		t.Fatalf("memory retrieval defaults were not applied: %#v", got)
+	}
+
+	explicit := NormalizeMemoryConfig(MemoryConfig{MemoryIndexName: "tenant-memory"})
+	if explicit.MemoryIndexName != "tenant-memory" {
+		t.Fatalf("explicit memory index name changed to %q", explicit.MemoryIndexName)
+	}
+}

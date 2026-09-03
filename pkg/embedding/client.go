@@ -6,10 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"github.com/huadeng408/RAG-High-Availability/internal/config"
 	"github.com/huadeng408/RAG-High-Availability/pkg/log"
+	"io"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -57,10 +57,7 @@ type apiError struct {
 
 // Error handles error.
 func (e *apiError) Error() string {
-	if strings.TrimSpace(e.body) == "" {
-		return fmt.Sprintf("embedding api returned non-200 status: %s", e.statusText)
-	}
-	return fmt.Sprintf("embedding api returned non-200 status: %s, body: %s", e.statusText, strings.TrimSpace(e.body))
+	return fmt.Sprintf("embedding api returned non-200 status: %s", e.statusText)
 }
 
 // CreateEmbedding calls the OpenAI-compatible API to get the vector for a given text.
@@ -160,7 +157,7 @@ func (c *openAICompatibleClient) createEmbeddingsOnce(ctx context.Context, reqBo
 			statusText: resp.Status,
 			body:       string(bodyBytes),
 		}
-		log.Errorf("[EmbeddingClient] %v", apiErr)
+		log.Errorf("[EmbeddingClient] request failed with status=%s", apiErr.statusText)
 		return nil, apiErr
 	}
 
@@ -203,6 +200,10 @@ func isRetriableEmbeddingError(err error) bool {
 // isDimensionsUnsupported reports whether dimensions unsupported.
 func isDimensionsUnsupported(err error) bool {
 	msg := strings.ToLower(err.Error())
+	var apiErr *apiError
+	if asAPIError(err, &apiErr) {
+		msg += " " + strings.ToLower(apiErr.body)
+	}
 	if strings.Contains(msg, "dimensions") && (strings.Contains(msg, "unsupported") || strings.Contains(msg, "unknown") || strings.Contains(msg, "invalid")) {
 		return true
 	}

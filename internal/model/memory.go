@@ -3,6 +3,12 @@ package model
 
 import "time"
 
+const (
+	MemoryIndexPending = "PENDING"
+	MemoryIndexClaimed = "CLAIMED"
+	MemoryIndexIndexed = "INDEXED"
+)
+
 // WorkingMemorySnapshot captures the working memory snapshot.
 type WorkingMemorySnapshot struct {
 	ID             uint      `gorm:"primaryKey;autoIncrement"`
@@ -40,17 +46,23 @@ func (UserProfileSlot) TableName() string {
 
 // LongTermMemory represents a long term memory.
 type LongTermMemory struct {
-	ID             uint      `gorm:"primaryKey;autoIncrement"`
-	MemoryID       string    `gorm:"type:varchar(96);uniqueIndex;not null"`
-	UserID         uint      `gorm:"index;not null"`
-	ConversationID string    `gorm:"type:varchar(64);index;not null"`
-	MemoryType     string    `gorm:"type:varchar(32);index;not null"`
-	Content        string    `gorm:"type:text;not null"`
-	Summary        string    `gorm:"type:text"`
-	EntitiesJSON   string    `gorm:"type:text"`
-	Importance     float64   `gorm:"not null;default:0"`
-	CreatedAt      time.Time `gorm:"autoCreateTime;index"`
-	UpdatedAt      time.Time `gorm:"autoUpdateTime"`
+	ID                 uint       `gorm:"primaryKey;autoIncrement"`
+	MemoryID           string     `gorm:"type:varchar(96);uniqueIndex;not null"`
+	UserID             uint       `gorm:"index;not null"`
+	ConversationID     string     `gorm:"type:varchar(64);index;not null"`
+	MemoryType         string     `gorm:"type:varchar(32);index;not null"`
+	Content            string     `gorm:"type:text;not null"`
+	Summary            string     `gorm:"type:text"`
+	EntitiesJSON       string     `gorm:"type:text"`
+	Importance         float64    `gorm:"not null;default:0"`
+	IndexStatus        string     `gorm:"type:varchar(20);not null;default:PENDING;index"`
+	IndexAttemptCount  int        `gorm:"not null;default:0"`
+	IndexClaimedAt     *time.Time `gorm:"index"`
+	IndexNextAttemptAt *time.Time `gorm:"index"`
+	IndexLastError     string     `gorm:"type:text"`
+	IndexedAt          *time.Time
+	CreatedAt          time.Time `gorm:"autoCreateTime;index"`
+	UpdatedAt          time.Time `gorm:"autoUpdateTime"`
 }
 
 // TableName handles table name.

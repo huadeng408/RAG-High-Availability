@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -227,6 +228,42 @@ func Init(configPath string) {
 		panic(fmt.Errorf("无法将配置解析到结构体中: %w", err))
 	}
 	expandEnvironmentPlaceholders(&Conf)
+	Conf.Memory = NormalizeMemoryConfig(Conf.Memory)
+}
+
+// NormalizeMemoryConfig applies the defaults needed by startup and request-time memory components.
+func NormalizeMemoryConfig(cfg MemoryConfig) MemoryConfig {
+	if cfg.SensoryMaxMessages <= 0 {
+		cfg.SensoryMaxMessages = 6
+	}
+	if cfg.SensoryMaxTokens <= 0 {
+		cfg.SensoryMaxTokens = 800
+	}
+	if cfg.WorkingTriggerMessages <= 0 {
+		cfg.WorkingTriggerMessages = 8
+	}
+	if cfg.WorkingMaxFacts <= 0 {
+		cfg.WorkingMaxFacts = 6
+	}
+	if cfg.WorkingHistoryMessages <= 0 {
+		cfg.WorkingHistoryMessages = 12
+	}
+	if cfg.ProfileMaxSlots <= 0 {
+		cfg.ProfileMaxSlots = 6
+	}
+	if cfg.LongTermTopK <= 0 {
+		cfg.LongTermTopK = 4
+	}
+	if cfg.ContextTopK <= 0 {
+		cfg.ContextTopK = 6
+	}
+	if cfg.LongTermMinImportance <= 0 {
+		cfg.LongTermMinImportance = 0.45
+	}
+	if strings.TrimSpace(cfg.MemoryIndexName) == "" {
+		cfg.MemoryIndexName = "conversation_memory"
+	}
+	return cfg
 }
 
 func expandEnvironmentPlaceholders(cfg *Config) {

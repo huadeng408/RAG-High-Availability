@@ -2,6 +2,11 @@
 package repository
 
 import (
+	"context"
+	"errors"
+	"strings"
+	"time"
+
 	"github.com/huadeng408/RAG-High-Availability/internal/model"
 
 	"gorm.io/gorm"
@@ -15,6 +20,9 @@ type MemoryRepository interface {
 	GetProfileSlot(userID uint, slotKey string) (*model.UserProfileSlot, error)
 	UpsertProfileSlot(slot *model.UserProfileSlot) error
 	CreateLongTermMemory(memory *model.LongTermMemory) error
+	ClaimPendingLongTermMemories(ctx context.Context, limit int, lease time.Duration) ([]model.LongTermMemory, error)
+	MarkLongTermMemoryIndexed(memoryID string, attempt int) error
+	MarkLongTermMemoryIndexFailed(memoryID string, attempt int, lastError string, nextAttemptAt time.Time) error
 }
 
 // memoryRepository implements persistence operations for memory data.
@@ -95,4 +103,84 @@ func (r *memoryRepository) UpsertProfileSlot(slot *model.UserProfileSlot) error 
 // CreateLongTermMemory creates long term memory.
 func (r *memoryRepository) CreateLongTermMemory(memory *model.LongTermMemory) error {
 	return r.db.Create(memory).Error
+}
+
+// ClaimPendingLongTermMemories leases durable indexing work to one dispatcher instance.
+func (r *memoryRepository) ClaimPendingLongTermMemories(ctx context.Context, limit int, lease time.Duration) ([]model.LongTermMemory, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if lease <= 0 {
+		lease = time.Minute
+	}
+	now := time.Now()
+	expired := now.Add(-lease)
+	availability := "(index_status = ? AND (index_next_attempt_at IS NULL OR index_next_attempt_at <= ?)) OR (index_status = ? AND index_claimed_at <= ?)"
+	args := []any{model.MemoryIndexPending, now, model.MemoryIndexClaimed, expired}
+
+	var candidates []model.LongTermMemory
+	if err := r.db.WithContext(ctx).Where(availability, args...).Order("id asc").Limit(limit).Find(&candidates).Error; err != nil {
+		return nil, err
+	}
+
+	claimed := make([]model.LongTermMemory, 0, len(candidates))
+	for _, candidate := range candidates {
+		result := r.db.WithContext(ctx).Model(&model.LongTermMemory{}).
+			Where("id = ? AND ("+availability+")", append([]any{candidate.ID}, args...)...).
+			Updates(map[string]any{
+				"index_status":        model.MemoryIndexClaimed,
+				"index_claimed_at":    now,
+				"index_attempt_count": gorm.Expr("index_attempt_count + 1"),
+			})
+		if result.Error != nil {
+			return claimed, result.Error
+		}
+		if result.RowsAffected == 1 {
+			candidate.IndexStatus = model.MemoryIndexClaimed
+			candidate.IndexClaimedAt = &now
+			candidate.IndexAttemptCount++
+			claimed = append(claimed, candidate)
+		}
+	}
+	return claimed, nil
+}
+
+// MarkLongTermMemoryIndexed completes the active indexing lease.
+func (r *memoryRepository) MarkLongTermMemoryIndexed(memoryID string, attempt int) error {
+	now := time.Now()
+	result := r.db.Model(&model.LongTermMemory{}).
+		Where("memory_id = ? AND index_status = ? AND index_attempt_count = ?", memoryID, model.MemoryIndexClaimed, attempt).
+		Updates(map[string]any{
+			"index_status":          model.MemoryIndexIndexed,
+			"index_claimed_at":      nil,
+			"index_next_attempt_at": nil,
+			"index_last_error":      "",
+			"indexed_at":            &now,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("long-term memory indexing claim is stale")
+	}
+	return nil
+}
+
+// MarkLongTermMemoryIndexFailed releases the active lease for a delayed retry.
+func (r *memoryRepository) MarkLongTermMemoryIndexFailed(memoryID string, attempt int, lastError string, nextAttemptAt time.Time) error {
+	result := r.db.Model(&model.LongTermMemory{}).
+		Where("memory_id = ? AND index_status = ? AND index_attempt_count = ?", memoryID, model.MemoryIndexClaimed, attempt).
+		Updates(map[string]any{
+			"index_status":          model.MemoryIndexPending,
+			"index_claimed_at":      nil,
+			"index_next_attempt_at": &nextAttemptAt,
+			"index_last_error":      strings.TrimSpace(lastError),
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("long-term memory indexing claim is stale")
+	}
+	return nil
 }

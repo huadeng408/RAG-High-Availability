@@ -421,10 +421,49 @@ def _verify_reliability(report: dict) -> None:
         if memory.get(key) is not True:
             raise ValueError(f"reliability.memory.{key} must be true")
     marker = str(memory["marker"]).strip()
-    if int(memory.get("mysqlMarkerCount", 0)) < 1:
+    mysql_marker_count = memory.get("mysqlMarkerCount")
+    elasticsearch_marker_count = memory.get("elasticsearchMarkerCount")
+    if type(mysql_marker_count) is not int or mysql_marker_count < 1:
         raise ValueError("memory marker must be present in MySQL")
-    if int(memory.get("elasticsearchMarkerCount", 0)) < 1:
+    if type(elasticsearch_marker_count) is not int or elasticsearch_marker_count < 1:
         raise ValueError("memory marker must be present in Elasticsearch")
+    if mysql_marker_count != elasticsearch_marker_count:
+        raise ValueError("memory marker counts must be matching in MySQL and Elasticsearch")
+    indexing = memory.get("indexing")
+    before_indexing = indexing.get("beforeRecovery") if isinstance(indexing, dict) else None
+    after_indexing = indexing.get("afterRecovery") if isinstance(indexing, dict) else None
+    mapping = indexing.get("mapping") if isinstance(indexing, dict) else None
+    before_attempts = before_indexing.get("attemptCount") if isinstance(before_indexing, dict) else None
+    after_attempts = after_indexing.get("attemptCount") if isinstance(after_indexing, dict) else None
+    if (
+        not isinstance(before_indexing, dict)
+        or before_indexing.get("status") != "PENDING"
+        or type(before_attempts) is not int
+        or before_attempts < 1
+        or before_indexing.get("claimed") is not False
+        or before_indexing.get("retryScheduled") is not True
+        or before_indexing.get("lastErrorPresent") is not True
+        or before_indexing.get("indexed") is not False
+    ):
+        raise ValueError("memory indexing must prove a durable failed attempt before recovery")
+    if (
+        not isinstance(after_indexing, dict)
+        or after_indexing.get("status") != "INDEXED"
+        or type(after_attempts) is not int
+        or after_attempts <= before_attempts
+        or after_indexing.get("claimed") is not False
+        or after_indexing.get("retryScheduled") is not False
+        or after_indexing.get("lastErrorPresent") is not False
+        or after_indexing.get("indexed") is not True
+    ):
+        raise ValueError("memory indexing must prove automatic recovery after the failed attempt")
+    if (
+        not isinstance(mapping, dict)
+        or mapping.get("index") != "conversation_memory"
+        or mapping.get("vectorType") != "dense_vector"
+        or mapping.get("dimensions") != 8
+    ):
+        raise ValueError("memory indexing mapping must prove an 8-dimensional dense_vector field")
     readback_items = memory.get("readbackItems")
     if not isinstance(readback_items, list) or marker not in json.dumps(readback_items, ensure_ascii=False):
         raise ValueError("memory marker must be present in direct readback items")

@@ -148,7 +148,17 @@ func EnsureMemoryIndex(indexName string, vectorDims int) error {
 	defer res.Body.Close()
 
 	if !res.IsError() && res.StatusCode == http.StatusOK {
-		log.Infof("memory index '%s' already exists", indexName)
+		vectorType, dims, mappingErr := getIndexVectorMapping(context.Background(), indexName, "vector")
+		if mappingErr != nil {
+			return fmt.Errorf("validate memory index mapping: %w", mappingErr)
+		}
+		if vectorType != "dense_vector" {
+			return fmt.Errorf("memory index '%s' vector mapping must be dense_vector, got %q", indexName, vectorType)
+		}
+		if dims != vectorDims {
+			return fmt.Errorf("memory index '%s' vector dims=%d but embedding dims=%d", indexName, dims, vectorDims)
+		}
+		log.Infof("memory index '%s' already exists with dense_vector dims=%d", indexName, dims)
 		return nil
 	}
 	if res.StatusCode != http.StatusNotFound {
@@ -268,25 +278,31 @@ func createIndexIfNotExists(indexName string, vectorDims int) error {
 
 // GetIndexVectorDims reads the configured dense-vector dimension from an index mapping.
 func GetIndexVectorDims(ctx context.Context, indexName, fieldName string) (int, error) {
+	_, dims, err := getIndexVectorMapping(ctx, indexName, fieldName)
+	return dims, err
+}
+
+func getIndexVectorMapping(ctx context.Context, indexName, fieldName string) (string, int, error) {
 	res, err := ESClient.Indices.GetMapping(ESClient.Indices.GetMapping.WithContext(ctx), ESClient.Indices.GetMapping.WithIndex(indexName))
 	if err != nil {
-		return 0, err
+		return "", 0, err
 	}
 	defer res.Body.Close()
 	if res.IsError() {
 		body, _ := io.ReadAll(res.Body)
-		return 0, fmt.Errorf("get mapping failed: status=%s body=%s", res.Status(), strings.TrimSpace(string(body)))
+		return "", 0, fmt.Errorf("get mapping failed: status=%s body=%s", res.Status(), strings.TrimSpace(string(body)))
 	}
 
 	var mapping map[string]struct {
 		Mappings struct {
 			Properties map[string]struct {
-				Dims any `json:"dims"`
+				Type string `json:"type"`
+				Dims any    `json:"dims"`
 			} `json:"properties"`
 		} `json:"mappings"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&mapping); err != nil {
-		return 0, err
+		return "", 0, err
 	}
 	idx, ok := mapping[indexName]
 	if !ok {
@@ -297,24 +313,24 @@ func GetIndexVectorDims(ctx context.Context, indexName, fieldName string) (int, 
 	}
 	field, ok := idx.Mappings.Properties[fieldName]
 	if !ok {
-		return 0, nil
+		return "", 0, nil
 	}
 	switch d := field.Dims.(type) {
 	case float64:
-		return int(d), nil
+		return field.Type, int(d), nil
 	case int:
-		return d, nil
+		return field.Type, d, nil
 	case json.Number:
 		v, _ := d.Int64()
-		return int(v), nil
+		return field.Type, int(v), nil
 	case string:
 		v, convErr := strconv.Atoi(d)
 		if convErr != nil {
-			return 0, convErr
+			return "", 0, convErr
 		}
-		return v, nil
+		return field.Type, v, nil
 	default:
-		return 0, nil
+		return field.Type, 0, nil
 	}
 }
 
@@ -343,7 +359,10 @@ func IndexDocument(ctx context.Context, indexName string, doc model.EsDocument) 
 }
 
 // IndexMemoryDocument writes one memory document into Elasticsearch.
-func IndexMemoryDocument(ctx context.Context, indexName string, doc model.MemoryEsDocument) error {
+func IndexMemoryDocument(ctx context.Context, client *elasticsearch.Client, indexName string, doc model.MemoryEsDocument) error {
+	if client == nil {
+		return errors.New("elasticsearch client is required")
+	}
 	docBytes, err := json.Marshal(doc)
 	if err != nil {
 		return err
@@ -355,14 +374,13 @@ func IndexMemoryDocument(ctx context.Context, indexName string, doc model.Memory
 		Body:       bytes.NewReader(docBytes),
 		Refresh:    "true",
 	}
-	res, err := req.Do(ctx, ESClient)
+	res, err := req.Do(ctx, client)
 	if err != nil {
 		return err
 	}
 	defer res.Body.Close()
 	if res.IsError() {
-		bodyBytes, _ := io.ReadAll(res.Body)
-		return fmt.Errorf("failed to index memory document: status=%s body=%s", res.Status(), strings.TrimSpace(string(bodyBytes)))
+		return fmt.Errorf("failed to index memory document: status=%s", res.Status())
 	}
 	return nil
 }

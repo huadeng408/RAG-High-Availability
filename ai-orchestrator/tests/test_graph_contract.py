@@ -9,6 +9,7 @@ from langchain_core.documents import Document
 from app.config import ModelSettings, Settings
 from app.graph import build_graph
 from app.models import PromptContextResponse, SessionResponse
+from app.trace import reset_trace_id, set_trace_id
 
 
 class GraphContractTests(unittest.IsolatedAsyncioTestCase):
@@ -115,6 +116,36 @@ class GraphContractTests(unittest.IsolatedAsyncioTestCase):
                     with self.assertRaises(error):
                         await graph.ainvoke({"query": "hello", "user": {"id": 1}})
                 self.assertEqual([], backend.persisted)
+
+    async def test_persist_failure_emits_trace_correlated_degradation_without_secret(self) -> None:
+        class FailingBackend:
+            async def persist_turn(self, _payload):
+                raise RuntimeError("provider credential secret-value")
+
+        with patch("app.graph._build_model", return_value=object()):
+            graph = build_graph(self.settings(), FailingBackend())
+        persist_node = graph.get_graph().nodes["persist_memory"].data
+        token = set_trace_id("trace-memory-degraded")
+        try:
+            with self.assertLogs("rha.orchestrator", level="INFO") as captured:
+                result = await persist_node.ainvoke(
+                    {
+                        "answer": "stored answer",
+                        "query": "remember this",
+                        "user": {"id": 1, "username": "alice"},
+                        "conversation_id": "conversation-1",
+                        "history": [],
+                    }
+                )
+        finally:
+            reset_trace_id(token)
+
+        rendered = "\n".join(captured.output)
+        self.assertEqual({}, result)
+        self.assertIn("persist_memory_degraded", rendered)
+        self.assertIn("trace-memory-degraded", rendered)
+        self.assertIn("RuntimeError", rendered)
+        self.assertNotIn("secret-value", rendered)
 
 
 if __name__ == "__main__":

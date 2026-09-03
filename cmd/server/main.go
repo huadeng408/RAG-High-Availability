@@ -142,6 +142,7 @@ func main() {
 	defer cancelApp()
 	go kafka.StartPipelineConsumers(cfg.Kafka, processor, pipelineTaskRepo)
 	go service.RunInitialTaskDispatcher(appCtx, pipelineTaskRepo, time.Second)
+	go service.RunMemoryIndexDispatcher(appCtx, memoryRepo, embeddingClient, es.ESClient, cfg.Memory, time.Second)
 	go initSeedFiles(appCtx, "initfile", userRepository, uploadService)
 
 	gin.SetMode(cfg.Server.Mode)

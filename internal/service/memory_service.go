@@ -17,7 +17,6 @@ import (
 	"github.com/huadeng408/RAG-High-Availability/internal/model"
 	"github.com/huadeng408/RAG-High-Availability/internal/repository"
 	"github.com/huadeng408/RAG-High-Availability/pkg/embedding"
-	"github.com/huadeng408/RAG-High-Availability/pkg/es"
 	"github.com/huadeng408/RAG-High-Availability/pkg/log"
 	orchestratorclient "github.com/huadeng408/RAG-High-Availability/pkg/orchestrator"
 	"github.com/huadeng408/RAG-High-Availability/pkg/reranker"
@@ -112,37 +111,7 @@ func NewMemoryService(
 
 // normalizeMemoryConfig fills in conservative defaults for the memory subsystem.
 func normalizeMemoryConfig(cfg config.MemoryConfig) config.MemoryConfig {
-	if cfg.SensoryMaxMessages <= 0 {
-		cfg.SensoryMaxMessages = 6
-	}
-	if cfg.SensoryMaxTokens <= 0 {
-		cfg.SensoryMaxTokens = 800
-	}
-	if cfg.WorkingTriggerMessages <= 0 {
-		cfg.WorkingTriggerMessages = 8
-	}
-	if cfg.WorkingMaxFacts <= 0 {
-		cfg.WorkingMaxFacts = 6
-	}
-	if cfg.WorkingHistoryMessages <= 0 {
-		cfg.WorkingHistoryMessages = 12
-	}
-	if cfg.ProfileMaxSlots <= 0 {
-		cfg.ProfileMaxSlots = 6
-	}
-	if cfg.LongTermTopK <= 0 {
-		cfg.LongTermTopK = 4
-	}
-	if cfg.ContextTopK <= 0 {
-		cfg.ContextTopK = 6
-	}
-	if cfg.LongTermMinImportance <= 0 {
-		cfg.LongTermMinImportance = 0.45
-	}
-	if strings.TrimSpace(cfg.MemoryIndexName) == "" {
-		cfg.MemoryIndexName = "conversation_memory"
-	}
-	return cfg
+	return config.NormalizeMemoryConfig(cfg)
 }
 
 // BuildSensoryMemory trims recent dialogue history into a compact short-term memory window.
@@ -363,31 +332,12 @@ func (s *memoryService) PersistInteraction(ctx context.Context, user *model.User
 		Summary:        summary,
 		EntitiesJSON:   string(entitiesJSON),
 		Importance:     payload.Importance,
+		IndexStatus:    model.MemoryIndexPending,
 	}
 	if err := s.repo.CreateLongTermMemory(entry); err != nil {
 		return err
 	}
-
-	if s.embeddingClient == nil || s.esClient == nil {
-		return nil
-	}
-
-	vector, err := s.embeddingClient.CreateEmbedding(ctx, summary)
-	if err != nil {
-		return nil
-	}
-
-	doc := model.MemoryEsDocument{
-		MemoryID:       memoryID,
-		UserID:         user.ID,
-		ConversationID: conversationID,
-		MemoryType:     entry.MemoryType,
-		TextContent:    summary,
-		Vector:         vector,
-		Importance:     entry.Importance,
-		CreatedAt:      entry.CreatedAt,
-	}
-	return es.IndexMemoryDocument(ctx, s.cfg.MemoryIndexName, doc)
+	return nil
 }
 
 // renderProfile renders profile.

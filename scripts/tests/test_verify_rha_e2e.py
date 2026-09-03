@@ -225,6 +225,29 @@ def reliability_report() -> dict:
             "firstTurnStored": True,
             "secondTurnRetrieved": True,
             "durable": True,
+            "indexing": {
+                "beforeRecovery": {
+                    "status": "PENDING",
+                    "attemptCount": 1,
+                    "claimed": False,
+                    "retryScheduled": True,
+                    "lastErrorPresent": True,
+                    "indexed": False,
+                },
+                "afterRecovery": {
+                    "status": "INDEXED",
+                    "attemptCount": 2,
+                    "claimed": False,
+                    "retryScheduled": False,
+                    "lastErrorPresent": False,
+                    "indexed": True,
+                },
+                "mapping": {
+                    "index": "conversation_memory",
+                    "vectorType": "dense_vector",
+                    "dimensions": 8,
+                },
+            },
             "shortTermHistoryCleared": True,
             "mysqlMarkerCount": 1,
             "elasticsearchMarkerCount": 1,
@@ -442,6 +465,34 @@ class VerifyRhaE2ETest(unittest.TestCase):
             path = Path(directory) / "report.json"
             path.write_text(json.dumps(report), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "Redis"):
+                VERIFY_MODULE.verify(path)
+
+    def test_rejects_memory_without_failed_attempt_and_automatic_index_recovery(self) -> None:
+        mutations = (
+            lambda indexing: indexing["beforeRecovery"].update(attemptCount=0),
+            lambda indexing: indexing["beforeRecovery"].update(lastErrorPresent=False),
+            lambda indexing: indexing["afterRecovery"].update(status="PENDING"),
+            lambda indexing: indexing["afterRecovery"].update(attemptCount=1),
+            lambda indexing: indexing["afterRecovery"].update(indexed=False),
+            lambda indexing: indexing["mapping"].update(vectorType="float"),
+            lambda indexing: indexing["mapping"].update(dimensions=7),
+        )
+        for mutate in mutations:
+            report = reliability_report()
+            mutate(report["reliability"]["memory"]["indexing"])
+            with self.subTest(mutate=mutate), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "report.json"
+                path.write_text(json.dumps(report), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "memory indexing"):
+                    VERIFY_MODULE.verify(path)
+
+    def test_rejects_memory_marker_count_mismatch_between_mysql_and_elasticsearch(self) -> None:
+        report = reliability_report()
+        report["reliability"]["memory"]["elasticsearchMarkerCount"] = 2
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "matching"):
                 VERIFY_MODULE.verify(path)
 
     def test_rejects_permission_evidence_from_unrelated_chat(self) -> None:

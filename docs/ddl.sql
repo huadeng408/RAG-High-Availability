@@ -182,11 +182,19 @@ CREATE TABLE long_term_memories (
     summary TEXT,
     entities_json TEXT,
     importance DOUBLE NOT NULL DEFAULT 0,
+    index_status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    index_attempt_count INT NOT NULL DEFAULT 0,
+    index_claimed_at TIMESTAMP NULL,
+    index_next_attempt_at TIMESTAMP NULL,
+    index_last_error TEXT,
+    indexed_at TIMESTAMP NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uk_long_term_memory_id (memory_id),
     INDEX idx_long_term_memory_user (user_id),
-    INDEX idx_long_term_memory_created (created_at)
+    INDEX idx_long_term_memory_created (created_at),
+    INDEX idx_long_term_memory_dispatch (index_status, index_next_attempt_at),
+    INDEX idx_long_term_memory_claim (index_status, index_claimed_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 INSERT INTO users (username, password, role)

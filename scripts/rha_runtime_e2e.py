@@ -422,6 +422,102 @@ def wait_for_outbox_state(
         time.sleep(max(0.0, poll_interval))
 
 
+def _parse_memory_index_state(row: list[str]) -> dict[str, Any]:
+    if len(row) != 6:
+        raise ValueError(f"expected six memory index columns, got {len(row)}")
+    try:
+        attempt_count = int(row[1])
+        flags = [int(value) for value in row[2:]]
+    except ValueError as exc:
+        raise ValueError("memory index attempt count and flags must be integers") from exc
+    if attempt_count < 0 or any(flag not in (0, 1) for flag in flags):
+        raise ValueError("memory index attempt count or flags are invalid")
+    return {
+        "status": row[0].strip(),
+        "attemptCount": attempt_count,
+        "claimed": flags[0] == 1,
+        "retryScheduled": flags[1] == 1,
+        "lastErrorPresent": flags[2] == 1,
+        "indexed": flags[3] == 1,
+    }
+
+
+def wait_for_memory_index_state(
+    fetch_row: Callable[[], list[str]],
+    *,
+    phase: str,
+    timeout_seconds: float,
+    poll_interval: float,
+    previous_attempt_count: int = 0,
+) -> tuple[dict[str, Any], int]:
+    if phase not in {"before-recovery", "after-recovery"}:
+        raise ValueError(f"unsupported memory index phase: {phase}")
+    deadline = time.monotonic() + timeout_seconds
+    polls = 0
+    last_observation: object = None
+    while True:
+        row = fetch_row()
+        polls += 1
+        last_observation = row
+        try:
+            state = _parse_memory_index_state(row)
+        except ValueError:
+            state = None
+        if state is not None:
+            if phase == "before-recovery":
+                matched = (
+                    state["status"] == "PENDING"
+                    and state["attemptCount"] >= 1
+                    and state["claimed"] is False
+                    and state["retryScheduled"] is True
+                    and state["lastErrorPresent"] is True
+                    and state["indexed"] is False
+                )
+            else:
+                matched = (
+                    state["status"] == "INDEXED"
+                    and state["attemptCount"] > previous_attempt_count
+                    and state["claimed"] is False
+                    and state["retryScheduled"] is False
+                    and state["lastErrorPresent"] is False
+                    and state["indexed"] is True
+                )
+            if matched:
+                return state, polls
+            last_observation = state
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"memory indexing {phase} state was not observed; last observation={last_observation!r}"
+            )
+        time.sleep(max(0.0, poll_interval))
+
+
+def read_memory_index_mapping(
+    elasticsearch: RuntimeHTTPClient,
+    index_name: str,
+    expected_dimensions: int = 8,
+) -> dict[str, Any]:
+    resolved_name = index_name.strip()
+    if not resolved_name:
+        raise RuntimeError("memory index name is required")
+    response = elasticsearch.request_json("GET", f"/{quote(resolved_name, safe='')}/_mapping")
+    body = response.body if isinstance(response.body, dict) else {}
+    index_mapping = body.get(resolved_name) if isinstance(body, dict) else None
+    properties = ((index_mapping or {}).get("mappings") or {}).get("properties") or {}
+    vector_mapping = properties.get("vector") or {}
+    vector_type = str(vector_mapping.get("type", "")).strip()
+    if vector_type != "dense_vector":
+        raise RuntimeError(
+            f"memory index {resolved_name!r} vector mapping must be dense_vector, got {vector_type or 'missing'}"
+        )
+    dimensions = vector_mapping.get("dims")
+    if type(dimensions) is not int or dimensions != expected_dimensions:
+        raise RuntimeError(
+            f"memory index {resolved_name!r} dimensions must be {expected_dimensions}, got {dimensions!r}"
+        )
+    return {"index": resolved_name, "vectorType": vector_type, "dimensions": dimensions}
+
+
 def read_elasticsearch_uniqueness(
     elasticsearch: RuntimeHTTPClient,
     file_md5: str,
@@ -1198,13 +1294,48 @@ def run_runtime(
         permitted_hit = any(hit.get("fileMd5") == upload["fileMd5"] for hit in retrieval.get("hits") or [])
         foreign_private_absent = not any(hit.get("fileMd5") == foreign_id for hit in foreign_hits)
         marker = "RHA-MEMORY-" + run_suffix
-        _, memory_first = retrieve_and_chat("Remember this durable project marker: " + marker)
+        db_password = os.environ.get("RHA_E2E_PASSWORD", "")
+
+        def read_memory_index_row() -> list[str]:
+            completed = _docker_run(
+                [
+                    "docker", "exec", "-e", "MYSQL_PWD=" + db_password,
+                    str(args.mysql_container), "mysql", "-N", "-uroot", "RHA", "-e",
+                    "SELECT index_status,index_attempt_count,"
+                    "index_claimed_at IS NOT NULL,index_next_attempt_at IS NOT NULL,"
+                    "index_last_error <> '',indexed_at IS NOT NULL "
+                    f"FROM long_term_memories WHERE user_id={user_id} "
+                    f"AND (content LIKE '%{marker}%' OR summary LIKE '%{marker}%') "
+                    "ORDER BY id DESC LIMIT 1;",
+                ],
+                timeout_seconds=args.request_timeout,
+            )
+            return parse_mysql_tsv_row(completed.stdout)
+
+        set_model_failures(control_url, embeddings=True, timeout_seconds=args.request_timeout)
+        try:
+            _, memory_first = retrieve_and_chat("Remember this durable project marker: " + marker)
+            memory_before_recovery, _ = wait_for_memory_index_state(
+                read_memory_index_row,
+                phase="before-recovery",
+                timeout_seconds=args.pipeline_timeout,
+                poll_interval=args.poll_interval,
+            )
+        finally:
+            set_model_failures(control_url, timeout_seconds=args.request_timeout)
+        memory_after_recovery, _ = wait_for_memory_index_state(
+            read_memory_index_row,
+            phase="after-recovery",
+            previous_attempt_count=memory_before_recovery["attemptCount"],
+            timeout_seconds=args.pipeline_timeout,
+            poll_interval=args.poll_interval,
+        )
+        memory_mapping = read_memory_index_mapping(elasticsearch, "conversation_memory")
 
         memory_deadline = time.monotonic() + args.pipeline_timeout
         mysql_count = 0
         es_memory_count = 0
         while time.monotonic() < memory_deadline:
-            db_password = os.environ.get("RHA_E2E_PASSWORD", "")
             completed = subprocess.run(
                 ["docker", "exec", "-e", "MYSQL_PWD=" + db_password, str(args.mysql_container),
                  "mysql", "-N", "-uroot", "RHA", "-e",
@@ -1223,9 +1354,14 @@ def run_runtime(
                 es_memory_count = int((es_count_response.body or {}).get("count", 0))
             except RuntimeError:
                 es_memory_count = 0
-            if mysql_count > 0 and es_memory_count > 0:
+            if mysql_count > 0 and mysql_count == es_memory_count:
                 break
             time.sleep(max(0.1, args.poll_interval))
+        if mysql_count < 1 or mysql_count != es_memory_count:
+            raise RuntimeError(
+                "memory marker counts did not converge between MySQL and Elasticsearch: "
+                f"mysql={mysql_count} elasticsearch={es_memory_count}"
+            )
         redis_password = os.environ.get("RHA_E2E_PASSWORD", "")
         redis_clear = clear_redis_conversation_history(
             str(getattr(args, "redis_container", "rha-e2e-redis-1")),
@@ -1279,9 +1415,14 @@ def run_runtime(
                 "marker": marker,
                 "firstTurnStored": mysql_count > 0,
                 "secondTurnRetrieved": marker in str(memory_second.get("answer", "")),
-                "durable": mysql_count > 0 and es_memory_count > 0,
+                "durable": mysql_count > 0 and mysql_count == es_memory_count,
                 "mysqlMarkerCount": mysql_count,
                 "elasticsearchMarkerCount": es_memory_count,
+                "indexing": {
+                    "beforeRecovery": memory_before_recovery,
+                    "afterRecovery": memory_after_recovery,
+                    "mapping": memory_mapping,
+                },
                 "shortTermHistoryCleared": redis_clear["cleared"],
                 "redisKeysBefore": redis_clear["keysBefore"],
                 "redisKeysAfter": redis_clear["keysAfter"],

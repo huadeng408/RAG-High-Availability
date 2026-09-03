@@ -384,7 +384,12 @@ def build_graph(settings: Settings, backend: GoBackendClient):
                     answer=state["answer"],
                 )
             )
-        except Exception:
+        except Exception as exc:
+            emit_trace(
+                "persist_memory_degraded",
+                latency_ms=elapsed_ms(start),
+                error_type=type(exc).__name__,
+            )
             return {}
         emit_trace("persist_memory", latency_ms=elapsed_ms(start))
         return {}
