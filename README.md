@@ -8,7 +8,7 @@ RHA 是面向企业私有知识场景的高可用多模态 RAG 平台。它将�
 
 ### 多模态文档解析
 
-RHA 为不同文档结构使用不同的切分和证据模型，解析结果携带 `documentVersion`、解析器版本、来源路径和可选位置字段：
+RHA 覆盖 PDF、Word、PowerPoint、Excel 和图片五类结构化模态，并补充 TXT/Markdown 文本接入。解析结果携带 `documentVersion`、解析器版本、来源路径和可选位置字段：
 
 | 模态 | 结构化策略 | 引用定位 |
 | --- | --- | --- |
@@ -113,7 +113,7 @@ deployments/                Docker Compose、Embedding 和 Reranker 服务
 configs/                    Go 服务配置模板
 docs/                       DDL、架构说明和本地运行手册
 scripts/                    烟测、fixture 校验和基准脚本
-benchmarks/                 离线评测集与结果样例
+benchmarks/                 离线评测 Schema、确定性示例与脱敏基线
 ```
 
 ## 快速开始
@@ -218,7 +218,7 @@ python scripts/verify_langgraph_stack.py \
   --out benchmarks/results/langgraph-stack-smoke.json
 ```
 
-离线检索、RAG 流式和上传基准的命令与指标定义见 [docs/benchmark-guide.md](docs/benchmark-guide.md)。仓库中的历史上传样本 `benchmarks/results/upload-baguwen-benchmark.json` 记录了 120 份文档的上传成功率 100%，合并 P95 约 2.445 秒。
+离线评测的 Schema、分母规则、环境对齐要求和复现命令见 [docs/benchmark-guide.md](docs/benchmark-guide.md)。脱敏历史摘要仅证明 120/120 上传成功和合并 P95 2444.6 ms，不证明可检索率、引用质量或生产规模；确定性示例仅用于校验指标重算契约。
 
 运行隔离的 Docker 端到端验收（真实 Go API、Kafka、Python 生产解析器、MySQL、Elasticsearch 和 WebSocket，模型与 OCR 使用确定性本地桩）：
 
@@ -226,7 +226,13 @@ python scripts/verify_langgraph_stack.py \
 bash scripts/run_rha_e2e.sh
 ```
 
-验收报告写入 `benchmarks/results/rha-e2e.json`，默认校验上传幂等、四阶段入库、PPT 与图片检索、Alias 读回、流式回答、来源引用，以及一次真实 Kafka DLQ 重放恢复。恢复车道会让第三个 PNG 的 embedding 故障重试耗尽，读取 `file-dlq` 信封，由种子管理员调用重放接口，等待 `SEARCHABLE`，并检查 Elasticsearch 知识/证据计数没有重复。该报告用于功能验收，不代表生产模型效果或吞吐性能。
+验收报告写入 `benchmarks/results/rha-e2e.json`，默认校验上传幂等、四阶段入库、PPT 与图片检索、Alias 读回、流式回答、来源引用，以及一次真实 Kafka DLQ 重放恢复。Schema-v4 还验证 BM25/Reranker 降级、权限隔离、持久记忆、WebSocket trace 和精确 11 节点图。该报告用于功能验收，不代表生产模型效果或吞吐性能。
+
+完整发布门禁会重算离线 Recall@K、MRR 和 nDCG@K，调用 runtime E2E 校验器，并检查 tracked secret 与运行时产物策略：
+
+```powershell
+python scripts/verify_rha_release.py --e2e-report $env:RHA_E2E_REPORT
+```
 
 
 ## 设计文档

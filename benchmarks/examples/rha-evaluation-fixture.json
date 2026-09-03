@@ -1,0 +1,30 @@
+{
+  "reportKind": "rha-offline-evaluation",
+  "schemaVersion": 1,
+  "evidenceClass": "contract-fixture",
+  "generatedAt": "2026-09-03T00:00:00Z",
+  "commit": "e0eed22c2f42fdba9113804529dbf84b3c904984",
+  "corpus": {"id": "rha-deterministic-contract-v1", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "queryCount": 2, "qrelCount": 3},
+  "model": {"mode": "deterministic", "llm": "rha-contract-stub-v1", "embedding": "rha-contract-embedding-8d-v1", "reranker": "rha-contract-reranker-v1"},
+  "index": {"alias": "rha-knowledge-active", "analyzer": "standard", "vector": {"dimensions": 8, "distance": "cosine"}},
+  "environment": {"hardware": "single-process contract fixture", "runtime": "CPython 3.12"},
+  "concurrency": 1,
+  "topK": 2,
+  "queries": [
+    {"queryId": "q1", "qrels": [{"evidenceId": "a", "relevance": 3}, {"evidenceId": "b", "relevance": 1}], "rankedHits": [{"evidenceId": "a", "score": 1.0}, {"evidenceId": "x", "score": 0.2}], "hitCount": 2, "citationCount": 1},
+    {"queryId": "q2", "qrels": [{"evidenceId": "c", "relevance": 2}], "rankedHits": [{"evidenceId": "x", "score": 0.9}, {"evidenceId": "c", "score": 0.8}], "hitCount": 2, "citationCount": 1}
+  ],
+  "metrics": {
+    "recallAtK": {"value": 0.6666666666666666, "numerator": 2, "denominator": 3},
+    "mrr": {"value": 0.75, "numerator": 1.5, "denominator": 2},
+    "ndcgAtK": {"value": 0.7741245831422072, "numerator": 1.5482491662844144, "denominator": 2}
+  },
+  "latency": {"samplesMs": [10, 20, 30, 40], "sampleCount": 4, "percentilesMs": {"p50": 25.0, "p95": 38.5, "p99": 39.7}},
+  "rates": {
+    "upload": {"numerator": 2, "denominator": 2, "value": 1.0},
+    "merge": {"numerator": 2, "denominator": 2, "value": 1.0},
+    "pipeline": {"numerator": 2, "denominator": 2, "value": 1.0},
+    "searchable": {"numerator": 2, "denominator": 2, "value": 1.0},
+    "citedAnswer": {"numerator": 2, "denominator": 2, "value": 1.0}
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "reportKind": "rha-offline-quality-baseline",
+  "schemaVersion": 1,
+  "evidenceClass": "contract-fixture",
+  "source": "benchmarks/examples/rha-evaluation-fixture.json",
+  "scope": "Deterministic contract regression floor; not production retrieval quality.",
+  "corpus": {"id": "rha-deterministic-contract-v1", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "queryCount": 2, "qrelCount": 3},
+  "model": {"mode": "deterministic", "llm": "rha-contract-stub-v1", "embedding": "rha-contract-embedding-8d-v1", "reranker": "rha-contract-reranker-v1"},
+  "index": {"alias": "rha-knowledge-active", "analyzer": "standard", "vector": {"dimensions": 8, "distance": "cosine"}},
+  "environment": {"hardware": "single-process contract fixture", "runtime": "CPython 3.12"},
+  "concurrency": 1,
+  "topK": 2,
+  "metrics": {
+    "recallAtK": {"value": 0.6666666666666666},
+    "mrr": {"value": 0.75},
+    "ndcgAtK": {"value": 0.7741245831422072}
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "reportKind": "rha-upload-merge-baseline",
+  "schemaVersion": 1,
+  "evidenceClass": "historical-local-benchmark",
+  "sourceArtifact": "upload-baguwen-benchmark.json",
+  "sourceArtifactSha256": "484afbf0dde012c7ecdda8a6f3986b1b8ca5513beb38b74336e65d8ac70c1e4a",
+  "upload": {"numerator": 120, "denominator": 120, "successRate": 1.0},
+  "mergeLatencyMs": {"p95": 2444.6},
+  "scope": "Upload and merge only; this does not establish pipeline, searchable, citation, retrieval-quality, concurrency, or production-scale results."
+}

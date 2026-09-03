@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rha.local/schemas/rha-evaluation.schema.json",
+  "title": "RHA offline evaluation report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reportKind", "schemaVersion", "evidenceClass", "generatedAt", "commit", "corpus", "model", "index", "environment", "concurrency", "topK", "queries", "metrics", "latency", "rates"],
+  "properties": {
+    "reportKind": {"const": "rha-offline-evaluation"},
+    "schemaVersion": {"const": 1},
+    "evidenceClass": {"enum": ["contract-fixture", "offline-evaluation"]},
+    "generatedAt": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "corpus": {"$ref": "#/$defs/corpus"},
+    "model": {"$ref": "#/$defs/model"},
+    "index": {"$ref": "#/$defs/index"},
+    "environment": {"$ref": "#/$defs/environment"},
+    "concurrency": {"type": "integer", "minimum": 1},
+    "topK": {"type": "integer", "minimum": 1},
+    "queries": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/query"}},
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recallAtK", "mrr", "ndcgAtK"],
+      "properties": {
+        "recallAtK": {"$ref": "#/$defs/aggregate"},
+        "mrr": {"$ref": "#/$defs/aggregate"},
+        "ndcgAtK": {"$ref": "#/$defs/aggregate"}
+      }
+    },
+    "latency": {"$ref": "#/$defs/latency"},
+    "rates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["upload", "merge", "pipeline", "searchable", "citedAnswer"],
+      "properties": {
+        "upload": {"$ref": "#/$defs/rate"},
+        "merge": {"$ref": "#/$defs/rate"},
+        "pipeline": {"$ref": "#/$defs/rate"},
+        "searchable": {"$ref": "#/$defs/rate"},
+        "citedAnswer": {"$ref": "#/$defs/rate"}
+      }
+    }
+  },
+  "$defs": {
+    "corpus": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "sha256", "queryCount", "qrelCount"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "queryCount": {"type": "integer", "minimum": 1},
+        "qrelCount": {"type": "integer", "minimum": 1}
+      }
+    },
+    "model": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "llm", "embedding", "reranker"],
+      "properties": {
+        "mode": {"enum": ["deterministic", "external"]},
+        "llm": {"type": "string", "minLength": 1},
+        "embedding": {"type": "string", "minLength": 1},
+        "reranker": {"type": "string", "minLength": 1}
+      }
+    },
+    "index": {
+      "type": "object", "additionalProperties": false,
+      "required": ["alias", "analyzer", "vector"],
+      "properties": {
+        "alias": {"type": "string", "minLength": 1},
+        "analyzer": {"type": "string", "minLength": 1},
+        "vector": {
+          "type": "object", "additionalProperties": false,
+          "required": ["dimensions", "distance"],
+          "properties": {
+            "dimensions": {"type": "integer", "minimum": 1},
+            "distance": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
+    "environment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["hardware", "runtime"],
+      "properties": {
+        "hardware": {"type": "string", "minLength": 1},
+        "runtime": {"type": "string", "minLength": 1}
+      }
+    },
+    "qrel": {
+      "type": "object", "additionalProperties": false,
+      "required": ["evidenceId", "relevance"],
+      "properties": {
+        "evidenceId": {"type": "string", "minLength": 1},
+        "relevance": {"type": "integer", "minimum": 1}
+      }
+    },
+    "hit": {
+      "type": "object", "additionalProperties": false,
+      "required": ["evidenceId", "score"],
+      "properties": {
+        "evidenceId": {"type": "string", "minLength": 1},
+        "score": {"type": "number"}
+      }
+    },
+    "query": {
+      "type": "object", "additionalProperties": false,
+      "required": ["queryId", "qrels", "rankedHits", "hitCount", "citationCount"],
+      "properties": {
+        "queryId": {"type": "string", "minLength": 1},
+        "qrels": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/qrel"}},
+        "rankedHits": {"type": "array", "items": {"$ref": "#/$defs/hit"}},
+        "hitCount": {"type": "integer", "minimum": 0},
+        "citationCount": {"type": "integer", "minimum": 0}
+      }
+    },
+    "aggregate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["value", "numerator", "denominator"],
+      "properties": {
+        "value": {"type": "number", "minimum": 0, "maximum": 1},
+        "numerator": {"type": "number", "minimum": 0},
+        "denominator": {"type": "integer", "minimum": 1}
+      }
+    },
+    "rate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["numerator", "denominator", "value"],
+      "properties": {
+        "numerator": {"type": "integer", "minimum": 0},
+        "denominator": {"type": "integer", "minimum": 1},
+        "value": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "latency": {
+      "type": "object", "additionalProperties": false,
+      "required": ["samplesMs", "sampleCount", "percentilesMs"],
+      "properties": {
+        "samplesMs": {"type": "array", "minItems": 1, "items": {"type": "number", "minimum": 0}},
+        "sampleCount": {"type": "integer", "minimum": 1},
+        "percentilesMs": {
+          "type": "object", "additionalProperties": false,
+          "required": ["p50", "p95", "p99"],
+          "properties": {
+            "p50": {"type": "number", "minimum": 0},
+            "p95": {"type": "number", "minimum": 0},
+            "p99": {"type": "number", "minimum": 0}
+          }
+        }
+      }
+    }
+  }
+}

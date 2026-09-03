@@ -14,7 +14,22 @@
 /text.py
 /homepage
 /logs
-/benchmarks
+# Only the curated benchmark contract and sanitized examples belong in Git.
+/benchmarks/*
+!/benchmarks/README.md
+!/benchmarks/schemas/
+/benchmarks/schemas/*
+!/benchmarks/schemas/rha-evaluation.schema.json
+!/benchmarks/examples/
+/benchmarks/examples/*
+!/benchmarks/examples/rha-evaluation-fixture.json
+!/benchmarks/baselines/
+/benchmarks/baselines/*
+!/benchmarks/baselines/rha-evaluation-baseline.json
+!/benchmarks/baselines/upload-merge-120-summary.json
+/benchmarks/results/
+/benchmarks/datasets/
+/benchmarks/tmp/
 /cmd/benchmark
 /configs/config.benchmark.yaml
 /configs/config.docker-agent-test.yaml
@@ -22,7 +37,6 @@
 /deployments/docker-compose.e2e-ports.yaml
 /deployments/server-linux
 /server.exe
-/docs/benchmark-guide.md
 /docs/docker-kafka-agent-e2e-report-2026-04-07.md
 /docs/notion-capture
 /docs/reranker-benchmark.md
