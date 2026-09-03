@@ -39,13 +39,25 @@ def evaluation_report() -> dict:
     }
 
 
+def baseline_report(report: dict | None = None) -> dict:
+    source = evaluation_report() if report is None else report
+    return {
+        "reportKind": "rha-offline-quality-baseline",
+        "schemaVersion": 1,
+        "evidenceClass": source["evidenceClass"],
+        **{field: source[field] for field in MODULE.BASELINE_PARITY_FIELDS},
+        "metrics": {name: {"value": source["metrics"][name]["value"]} for name in MODULE.METRIC_NAMES},
+    }
+
+
 class VerifyRhaReleaseTest(unittest.TestCase):
     def test_checked_in_example_conforms_to_evaluation_schema(self) -> None:
         schema = json.loads((ROOT / "benchmarks" / "schemas" / "rha-evaluation.schema.json").read_text(encoding="utf-8"))
         example = json.loads((ROOT / "benchmarks" / "examples" / "rha-evaluation-fixture.json").read_text(encoding="utf-8"))
         self.assertEqual(schema["$schema"], "https://json-schema.org/draft/2020-12/schema")
         self.assertEqual(set(schema["required"]), set(example))
-        MODULE.verify_offline_report(example, baseline=example)
+        baseline = json.loads((ROOT / "benchmarks" / "baselines" / "rha-evaluation-baseline.json").read_text(encoding="utf-8"))
+        MODULE.verify_offline_report(example, baseline=baseline)
 
     def test_sanitized_upload_baseline_keeps_only_the_verified_floor(self) -> None:
         summary = json.loads((ROOT / "benchmarks" / "baselines" / "upload-merge-120-summary.json").read_text(encoding="utf-8"))
@@ -56,43 +68,78 @@ class VerifyRhaReleaseTest(unittest.TestCase):
             self.assertNotIn(raw_field, summary)
 
     def test_recomputes_metrics_and_accepts_valid_fixture(self) -> None:
-        result = MODULE.verify_offline_report(evaluation_report(), baseline=evaluation_report())
+        result = MODULE.verify_offline_report(evaluation_report(), baseline=baseline_report())
         self.assertAlmostEqual(result["metrics"]["mrr"]["value"], 0.75)
+
+    def test_accepts_strict_utc_rfc3339_timestamp_with_fraction(self) -> None:
+        report = evaluation_report()
+        report["generatedAt"] = "2026-09-03T12:34:56.123456Z"
+        MODULE.verify_offline_report(report, baseline=baseline_report(report))
+
+    def test_rejects_invalid_or_non_utc_timestamp(self) -> None:
+        invalid = (
+            "2026-99-03T00:00:00Z",
+            "2026-09-03 00:00:00Z",
+            "2026-09-03T00:00Z",
+            "2026-09-03T00:00:00+00:00",
+            "2026-09-03T00:00:00.1234567Z",
+        )
+        for generated_at in invalid:
+            report = evaluation_report()
+            report["generatedAt"] = generated_at
+            with self.subTest(generatedAt=generated_at), self.assertRaisesRegex(ValueError, "RFC 3339"):
+                MODULE.verify_offline_report(report, baseline=baseline_report())
+
+    def test_deterministic_model_mode_may_omit_model_identities(self) -> None:
+        report = evaluation_report()
+        report["model"] = {"mode": "deterministic"}
+        MODULE.verify_offline_report(report, baseline=baseline_report(report))
+
+    def test_named_model_mode_requires_all_identities(self) -> None:
+        report = evaluation_report()
+        report["model"]["mode"] = "named"
+        MODULE.verify_offline_report(report, baseline=baseline_report(report))
+        for identity in ("llm", "embedding", "reranker"):
+            invalid = evaluation_report()
+            invalid["model"]["mode"] = "named"
+            del invalid["model"][identity]
+            with self.subTest(identity=identity), self.assertRaisesRegex(ValueError, f"model.{identity}"):
+                MODULE.verify_offline_report(invalid, baseline=baseline_report())
 
     def test_rejects_declared_metric_mismatch(self) -> None:
         report = evaluation_report()
         report["metrics"]["mrr"]["value"] = 1.0
         with self.assertRaisesRegex(ValueError, "mrr"):
-            MODULE.verify_offline_report(report, baseline=report)
+            MODULE.verify_offline_report(report, baseline=baseline_report())
 
     def test_rejects_missing_execution_metadata(self) -> None:
         for field in ("model", "index", "environment", "concurrency"):
             report = evaluation_report()
             del report[field]
             with self.subTest(field=field), self.assertRaisesRegex(ValueError, field):
-                MODULE.verify_offline_report(report, baseline=report)
+                MODULE.verify_offline_report(report, baseline=baseline_report())
 
     def test_rejects_hit_count_mismatch(self) -> None:
         report = evaluation_report()
         report["queries"][0]["hitCount"] = 1
         with self.assertRaisesRegex(ValueError, "hitCount"):
-            MODULE.verify_offline_report(report, baseline=report)
+            MODULE.verify_offline_report(report, baseline=baseline_report())
 
     def test_rejects_latency_denominator_mismatch(self) -> None:
         report = evaluation_report()
         report["latency"]["sampleCount"] = 3
         with self.assertRaisesRegex(ValueError, "sampleCount"):
-            MODULE.verify_offline_report(report, baseline=report)
+            MODULE.verify_offline_report(report, baseline=baseline_report())
 
     def test_rejects_rate_denominator_mismatch(self) -> None:
         report = evaluation_report()
         report["rates"]["searchable"]["value"] = 0.5
         with self.assertRaisesRegex(ValueError, "searchable"):
-            MODULE.verify_offline_report(report, baseline=report)
+            MODULE.verify_offline_report(report, baseline=baseline_report())
 
     def test_rejects_metric_regression_against_baseline(self) -> None:
         report = evaluation_report()
-        baseline = evaluation_report()
+        baseline = baseline_report()
         report["queries"][0]["rankedHits"] = [
             {"evidenceId": "x", "score": 1.0},
             {"evidenceId": "y", "score": 0.2},
@@ -106,10 +153,25 @@ class VerifyRhaReleaseTest(unittest.TestCase):
 
     def test_rejects_baseline_from_a_different_environment(self) -> None:
         report = evaluation_report()
-        baseline = evaluation_report()
+        baseline = baseline_report()
         baseline["concurrency"] = 8
         with self.assertRaisesRegex(ValueError, "parity mismatch: concurrency"):
             MODULE.verify_offline_report(report, baseline=baseline)
+
+    def test_rejects_baseline_missing_each_required_parity_field(self) -> None:
+        for field in ("corpus", "model", "index", "environment", "concurrency", "topK"):
+            report = evaluation_report()
+            baseline = baseline_report()
+            del baseline[field]
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, f"baseline.{field}"):
+                MODULE.verify_offline_report(report, baseline=baseline)
+
+    def test_rejects_invalid_baseline_kind_and_version(self) -> None:
+        for field, value in (("reportKind", "rha-offline-evaluation"), ("schemaVersion", 2)):
+            baseline = baseline_report()
+            baseline[field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, f"baseline.{field}"):
+                MODULE.verify_offline_report(evaluation_report(), baseline=baseline)
 
     def test_runtime_gate_requires_schema_v4_and_rejects_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -126,6 +188,34 @@ class VerifyRhaReleaseTest(unittest.TestCase):
             with patch.object(MODULE, "run_runtime_verifier"):
                 with self.assertRaisesRegex(ValueError, "fixture/synthetic"):
                     MODULE.verify_runtime_report(path)
+
+    def test_runtime_gate_rejects_fixture_marker_anywhere_in_structured_report(self) -> None:
+        report = {
+            "reportKind": "rha-runtime-e2e",
+            "schemaVersion": 4,
+            "reliability": {},
+            "audit": {"nested": [{"evidenceLabel": "synthetic"}]},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with patch.object(MODULE, "run_runtime_verifier"):
+                with self.assertRaisesRegex(ValueError, "fixture/synthetic"):
+                    MODULE.verify_runtime_report(path)
+
+    def test_runtime_gate_allows_deterministic_model_declaration(self) -> None:
+        report = {
+            "reportKind": "rha-runtime-e2e",
+            "schemaVersion": 4,
+            "reliability": {},
+            "model": {"mode": "deterministic", "name": "rha-fixture-chat"},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with patch.object(MODULE, "run_runtime_verifier") as verifier:
+                MODULE.verify_runtime_report(path)
+                verifier.assert_called_once_with(path)
 
     def test_runtime_gate_rejects_pre_v4_report_before_invoking_existing_verifier(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -147,6 +237,40 @@ class VerifyRhaReleaseTest(unittest.TestCase):
         with patch.object(MODULE.subprocess, "run", return_value=listed):
             with self.assertRaisesRegex(ValueError, "tracked runtime"):
                 MODULE.verify_tracked_policy()
+
+    def test_tracked_policy_rejects_each_runtime_secret_binary_and_archive_path(self) -> None:
+        suspicious = (
+            "benchmarks/datasets/corpus.txt",
+            "benchmarks/tmp/scratch.json",
+            "artifacts/runtime-report.json",
+            "config/secrets.yaml",
+            "service/.env.production",
+            "certs/client.key",
+            "certs/client.pem",
+            "certs/client.p12",
+            "certs/client.pfx",
+            "certs/client.jks",
+            "output/database.sqlite",
+            "output/archive.zip",
+        )
+        for path in suspicious:
+            listed = MODULE.subprocess.CompletedProcess([], 0, stdout=(path + "\0").encode())
+            with self.subTest(path=path), patch.object(MODULE.subprocess, "run", return_value=listed):
+                with self.assertRaisesRegex(ValueError, "tracked runtime"):
+                    MODULE.verify_tracked_policy()
+
+    def test_tracked_policy_allows_legitimate_source_docs_tests_and_curated_json(self) -> None:
+        allowed = (
+            "scripts/scan_repository_secrets.py",
+            "pkg/token/jwt.go",
+            "docs/rha-e2e-runbook.md",
+            "scripts/tests/test_password_policy.py",
+            "benchmarks/examples/rha-evaluation-fixture.json",
+            "frontend/src/assets/svg-icon/文件类型图标.zip",
+        )
+        listed = MODULE.subprocess.CompletedProcess([], 0, stdout=("\0".join(allowed) + "\0").encode())
+        with patch.object(MODULE.subprocess, "run", return_value=listed):
+            MODULE.verify_tracked_policy()
 
 
 if __name__ == "__main__":

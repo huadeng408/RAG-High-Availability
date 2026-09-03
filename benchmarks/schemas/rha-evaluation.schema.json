@@ -9,7 +9,7 @@
     "reportKind": {"const": "rha-offline-evaluation"},
     "schemaVersion": {"const": 1},
     "evidenceClass": {"enum": ["contract-fixture", "offline-evaluation"]},
-    "generatedAt": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "generatedAt": {"type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?Z$"},
     "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "corpus": {"$ref": "#/$defs/corpus"},
     "model": {"$ref": "#/$defs/model"},
@@ -55,13 +55,17 @@
     },
     "model": {
       "type": "object", "additionalProperties": false,
-      "required": ["mode", "llm", "embedding", "reranker"],
+      "required": ["mode"],
       "properties": {
-        "mode": {"enum": ["deterministic", "external"]},
+        "mode": {"enum": ["deterministic", "named"]},
         "llm": {"type": "string", "minLength": 1},
         "embedding": {"type": "string", "minLength": 1},
         "reranker": {"type": "string", "minLength": 1}
-      }
+      },
+      "oneOf": [
+        {"properties": {"mode": {"const": "deterministic"}}},
+        {"properties": {"mode": {"const": "named"}}, "required": ["llm", "embedding", "reranker"]}
+      ]
     },
     "index": {
       "type": "object", "additionalProperties": false,

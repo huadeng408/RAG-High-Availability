@@ -5,7 +5,7 @@
   "generatedAt": "2026-09-03T00:00:00Z",
   "commit": "e0eed22c2f42fdba9113804529dbf84b3c904984",
   "corpus": {"id": "rha-deterministic-contract-v1", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "queryCount": 2, "qrelCount": 3},
-  "model": {"mode": "deterministic", "llm": "rha-contract-stub-v1", "embedding": "rha-contract-embedding-8d-v1", "reranker": "rha-contract-reranker-v1"},
+  "model": {"mode": "deterministic"},
   "index": {"alias": "rha-knowledge-active", "analyzer": "standard", "vector": {"dimensions": 8, "distance": "cosine"}},
   "environment": {"hardware": "single-process contract fixture", "runtime": "CPython 3.12"},
   "concurrency": 1,

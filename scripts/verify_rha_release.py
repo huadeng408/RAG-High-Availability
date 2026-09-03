@@ -6,8 +6,10 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -15,8 +17,23 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EVALUATION = ROOT / "benchmarks" / "examples" / "rha-evaluation-fixture.json"
 DEFAULT_BASELINE = ROOT / "benchmarks" / "baselines" / "rha-evaluation-baseline.json"
-FORBIDDEN_SUFFIXES = {".db", ".sqlite", ".sqlite3", ".aof", ".exe", ".dll", ".so", ".bin", ".pkl", ".pickle"}
-FORBIDDEN_FILENAMES = {"credentials.json", "secrets.json", "secrets.env", ".env.local"}
+RFC3339_UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$")
+BASELINE_PARITY_FIELDS = ("corpus", "model", "index", "environment", "concurrency", "topK")
+FORBIDDEN_BENCHMARK_PREFIXES = ("benchmarks/results/", "benchmarks/datasets/", "benchmarks/tmp/")
+FORBIDDEN_SUFFIXES = {
+    ".db", ".sqlite", ".sqlite3", ".aof", ".exe", ".dll", ".so", ".bin",
+    ".pkl", ".pickle", ".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".zip", ".tar",
+    ".tgz", ".gz", ".7z", ".rar",
+}
+FORBIDDEN_FILENAMES = {"credentials.json", "secrets.json", "secrets.env", ".env", ".env.local", "id_rsa", "id_ed25519"}
+ALLOWED_TRACKED_CONFIGS = {"ai-orchestrator/.env.example", "frontend/.env", "frontend/.env.prod", "frontend/.env.test"}
+ALLOWED_TRACKED_ASSETS = {"frontend/src/assets/svg-icon/文件类型图标.zip"}
+ALLOWED_CURATED_ARTIFACTS = {
+    "benchmarks/baselines/rha-evaluation-baseline.json",
+    "benchmarks/baselines/upload-merge-120-summary.json",
+    "benchmarks/examples/rha-evaluation-fixture.json",
+    "benchmarks/schemas/rha-evaluation.schema.json",
+}
 METRIC_NAMES = ("recallAtK", "mrr", "ndcgAtK")
 RATE_NAMES = ("upload", "merge", "pipeline", "searchable", "citedAnswer")
 
@@ -44,6 +61,33 @@ def _require_object(value: Any, field: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{field} must be an object")
     return value
+
+
+def _validate_utc_timestamp(value: Any, field: str) -> str:
+    text = str(value)
+    if not RFC3339_UTC.fullmatch(text):
+        raise ValueError(f"{field} must be a UTC RFC 3339 timestamp")
+    try:
+        parsed = datetime.fromisoformat(text[:-1] + "+00:00")
+    except ValueError as exc:
+        raise ValueError(f"{field} must be a UTC RFC 3339 timestamp") from exc
+    if parsed.tzinfo != timezone.utc or datetime.fromisoformat(parsed.isoformat()) != parsed:
+        raise ValueError(f"{field} must round-trip as UTC RFC 3339")
+    return text
+
+
+def _validate_model(value: Any, field: str) -> dict[str, Any]:
+    model = _require_object(value, field)
+    mode = model.get("mode")
+    if mode not in {"deterministic", "named"}:
+        raise ValueError(f"{field}.mode must be deterministic or named")
+    for name in ("llm", "embedding", "reranker"):
+        identity = model.get(name)
+        if mode == "named" and not isinstance(identity, str):
+            raise ValueError(f"{field}.{name} is required in named mode")
+        if identity is not None and (not isinstance(identity, str) or not identity.strip()):
+            raise ValueError(f"{field}.{name} must be a non-empty string when provided")
+    return model
 
 
 def _percentile(samples: list[float], quantile: float) -> float:
@@ -75,9 +119,7 @@ def verify_offline_report(report: dict[str, Any], *, baseline: dict[str, Any] | 
         raise ValueError("schemaVersion must be 1")
     if report.get("evidenceClass") not in {"contract-fixture", "offline-evaluation"}:
         raise ValueError("evidenceClass must identify contract-fixture or offline-evaluation evidence")
-    generated_at = str(report.get("generatedAt", ""))
-    if not generated_at.endswith("Z") or "T" not in generated_at:
-        raise ValueError("generatedAt must be a UTC RFC 3339 timestamp")
+    _validate_utc_timestamp(report.get("generatedAt"), "generatedAt")
     commit = str(report.get("commit", ""))
     if len(commit) != 40 or any(char not in "0123456789abcdef" for char in commit):
         raise ValueError("commit must be a full lowercase Git SHA")
@@ -85,12 +127,7 @@ def verify_offline_report(report: dict[str, Any], *, baseline: dict[str, Any] | 
     if not str(corpus.get("id", "")).strip():
         raise ValueError("corpus.id is required")
     _digest(corpus.get("sha256"), "corpus.sha256")
-    model = _require_object(report.get("model"), "model")
-    if model.get("mode") not in {"deterministic", "external"}:
-        raise ValueError("model.mode must be deterministic or external")
-    for name in ("llm", "embedding", "reranker"):
-        if not str(model.get(name, "")).strip():
-            raise ValueError(f"model.{name} is required")
+    _validate_model(report.get("model"), "model")
     index = _require_object(report.get("index"), "index")
     if not str(index.get("alias", "")).strip() or not str(index.get("analyzer", "")).strip():
         raise ValueError("index alias and analyzer are required")
@@ -187,8 +224,24 @@ def verify_offline_report(report: dict[str, Any], *, baseline: dict[str, Any] | 
         if denominator <= 0 or numerator < 0 or numerator > denominator or abs(value - numerator / denominator) > 1e-9:
             raise ValueError(f"rates.{name} has invalid numerator/denominator")
     if baseline is not None:
-        for field in ("corpus", "model", "index", "environment", "concurrency", "topK"):
-            if field in baseline and report.get(field) != baseline.get(field):
+        if baseline.get("reportKind") != "rha-offline-quality-baseline":
+            raise ValueError("baseline.reportKind must identify an offline quality baseline")
+        if baseline.get("schemaVersion") != 1:
+            raise ValueError("baseline.schemaVersion must be 1")
+        if baseline.get("evidenceClass") not in {"contract-fixture", "offline-evaluation"}:
+            raise ValueError("baseline.evidenceClass is invalid")
+        for field in BASELINE_PARITY_FIELDS:
+            if field not in baseline:
+                raise ValueError(f"baseline.{field} is required for parity")
+        for field in ("corpus", "index", "environment"):
+            _require_object(baseline.get(field), f"baseline.{field}")
+        _validate_model(baseline.get("model"), "baseline.model")
+        if _integer(baseline.get("concurrency"), "baseline.concurrency") < 1:
+            raise ValueError("baseline.concurrency must be positive")
+        if _integer(baseline.get("topK"), "baseline.topK") < 1:
+            raise ValueError("baseline.topK must be positive")
+        for field in BASELINE_PARITY_FIELDS:
+            if report.get(field) != baseline.get(field):
                 raise ValueError(f"baseline parity mismatch: {field}")
         baseline_metrics = _require_object(baseline.get("metrics"), "baseline.metrics")
         for name in METRIC_NAMES:
@@ -234,11 +287,27 @@ def verify_runtime_report(path: Path) -> dict[str, Any]:
         raise ValueError("runtime E2E report must use schemaVersion 4")
     if not isinstance(report.get("reliability"), dict):
         raise ValueError("runtime E2E reliability evidence is required")
-    metadata = {key: report.get(key) for key in ("evidenceClass", "mode", "environment", "ingestionMode", "parserMode")}
-    if _contains_fixture_marker(metadata):
+    if _contains_fixture_marker(report):
         raise ValueError("fixture/synthetic report cannot be presented as runtime E2E")
     run_runtime_verifier(path)
     return report
+
+
+def _tracked_path_violation(item: str) -> bool:
+    normalized = item.replace("\\", "/").lower()
+    if normalized in ALLOWED_TRACKED_CONFIGS or normalized in ALLOWED_TRACKED_ASSETS or normalized in ALLOWED_CURATED_ARTIFACTS:
+        return False
+    path = Path(normalized)
+    if normalized.startswith(FORBIDDEN_BENCHMARK_PREFIXES):
+        return True
+    if path.suffix in FORBIDDEN_SUFFIXES or path.name in FORBIDDEN_FILENAMES or path.name.startswith(".env."):
+        return True
+    tokens = {token for token in re.split(r"[^a-z0-9]+", path.stem) if token}
+    if tokens.intersection({"secret", "secrets", "password", "passwords", "credential", "credentials"}) and path.suffix.lower() not in {".py", ".go", ".md", ".html", ".ts", ".tsx", ".js", ".sh"}:
+        return True
+    if path.suffix.lower() in {".json", ".jsonl", ".xml", ".yaml", ".yml"} and ("report" in tokens or "/reports/" in normalized):
+        return True
+    return False
 
 
 def verify_tracked_policy() -> None:
@@ -248,9 +317,7 @@ def verify_tracked_policy() -> None:
     paths = [item for item in completed.stdout.decode("utf-8", errors="strict").split("\0") if item]
     suspicious = []
     for item in paths:
-        normalized = item.replace("\\", "/").lower()
-        suffix = Path(normalized).suffix
-        if normalized.startswith("benchmarks/results/") or suffix in FORBIDDEN_SUFFIXES or Path(normalized).name in FORBIDDEN_FILENAMES:
+        if _tracked_path_violation(item):
             suspicious.append(item)
     if suspicious:
         raise ValueError("tracked runtime/secret/binary/database paths: " + ", ".join(suspicious))

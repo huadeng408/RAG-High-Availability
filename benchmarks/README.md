@@ -31,3 +31,4 @@ python scripts/verify_rha_release.py `
 ```
 
 The release verifier always requires a separate schema-v4 runtime report. A fixture cannot satisfy that gate.
+For offline reports, `model.mode=deterministic` is sufficient by itself; `model.mode=named` requires LLM, embedding, and reranker identities.

@@ -10,7 +10,7 @@ Every report records:
 
 - full commit SHA and UTC generation time;
 - corpus ID/SHA-256, query count, and qrel count;
-- LLM, embedding, and reranker identity, or explicit deterministic mode;
+- explicit model mode: `named` requires LLM, embedding, and reranker identities; `deterministic` may omit them;
 - index alias, analyzer, vector dimensions, and distance function;
 - hardware/runtime, concurrency, and `topK`;
 - per-query qrels, ranked hits, hit count, and citation count;
