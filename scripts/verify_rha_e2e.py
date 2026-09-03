@@ -305,14 +305,36 @@ def _verify_reliability(report: dict) -> None:
         raise ValueError("reliability.brokerOutage pipeline must contain four successful stages")
     retrieval = broker.get("retrieval") or {}
     hits = retrieval.get("hits")
-    matching_hits = [hit for hit in hits or [] if hit.get("fileMd5") == file_md5 and hit.get("documentVersion") == document_version]
+    matching_hits = []
+    for hit in hits or []:
+        if hit.get("fileMd5") != file_md5:
+            continue
+        if any(
+            isinstance(citation, dict)
+            and citation.get("documentVersion") == document_version
+            for citation in hit.get("citations") or []
+        ):
+            matching_hits.append(hit)
     websocket = broker.get("websocket") or {}
     if not matching_hits:
         raise ValueError("reliability.brokerOutage retrieval must contain the recovered file and version")
     if not str(websocket.get("answer", "")).strip():
         raise ValueError("reliability.brokerOutage websocket answer must be non-empty")
-    retrieval_evidence = {citation.get("evidenceId") for hit in matching_hits for citation in hit.get("citations") or [] if citation.get("evidenceId")}
-    websocket_evidence = {citation.get("evidenceId") for citation in websocket.get("citations") or [] if citation.get("evidenceId")}
+    retrieval_evidence = {
+        citation.get("evidenceId")
+        for hit in matching_hits
+        for citation in hit.get("citations") or []
+        if isinstance(citation, dict)
+        and citation.get("documentVersion") == document_version
+        and citation.get("evidenceId")
+    }
+    websocket_evidence = {
+        citation.get("evidenceId")
+        for citation in websocket.get("citations") or []
+        if isinstance(citation, dict)
+        and citation.get("documentVersion") == document_version
+        and citation.get("evidenceId")
+    }
     if not retrieval_evidence.intersection(websocket_evidence):
         raise ValueError("reliability.brokerOutage websocket citations must intersect retrieval evidence")
     counts = broker.get("elasticsearch") or {}

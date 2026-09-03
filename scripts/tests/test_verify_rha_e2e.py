@@ -278,13 +278,18 @@ def reliability_report() -> dict:
             "retrieval": {
                 "hits": [{
                     "fileMd5": "0123456789abcdef0123456789abcdef",
-                    "documentVersion": "broker-version",
-                    "citations": [{"evidenceId": "broker-evidence"}],
+                    "citations": [{
+                        "evidenceId": "broker-evidence",
+                        "documentVersion": "broker-version",
+                    }],
                 }],
             },
             "websocket": {
                 "answer": "Recovered from durable outbox.",
-                "citations": [{"evidenceId": "broker-evidence"}],
+                "citations": [{
+                    "evidenceId": "broker-evidence",
+                    "documentVersion": "broker-version",
+                }],
             },
             "elasticsearch": {
                 "knowledgeCount": 1,
@@ -353,6 +358,34 @@ class VerifyRhaE2ETest(unittest.TestCase):
                 path.write_text(json.dumps(report), encoding="utf-8")
                 with self.assertRaisesRegex(ValueError, "brokerOutage"):
                     VERIFY_MODULE.verify(path)
+
+    def test_rejects_broker_hit_without_version_matching_citation(self) -> None:
+        for citations in (
+            [{"evidenceId": "broker-evidence", "documentVersion": "older-version"}],
+            [{"evidenceId": "broker-evidence"}],
+        ):
+            report = reliability_report()
+            outage = report["reliability"]["brokerOutage"]
+            outage["retrieval"]["hits"][0]["citations"] = citations
+            with self.subTest(citations=citations), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "report.json"
+                path.write_text(json.dumps(report), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "brokerOutage retrieval"):
+                    VERIFY_MODULE.verify(path)
+
+    def test_rejects_unrelated_broker_citation_from_satisfying_intersection(self) -> None:
+        report = reliability_report()
+        outage = report["reliability"]["brokerOutage"]
+        outage["retrieval"]["hits"][0]["citations"] = [
+            {"evidenceId": "broker-evidence", "documentVersion": "broker-version"},
+            {"evidenceId": "websocket-only", "documentVersion": "older-version"},
+        ]
+        outage["websocket"]["citations"] = [{"evidenceId": "websocket-only"}]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "brokerOutage websocket citations"):
+                VERIFY_MODULE.verify(path)
 
     def test_rejects_memory_without_marker_specific_durable_evidence(self) -> None:
         mutations = (
