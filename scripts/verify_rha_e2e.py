@@ -218,13 +218,50 @@ def _verify_reliability(report: dict, trace_id: str) -> None:
     for key in ("embeddingFailureFallback", "rerankerTimeoutFallback"):
         if degradation.get(key) is not True:
             raise ValueError(f"reliability.degradation.{key} must be true")
+    reranker_control = degradation.get("rerankerControl")
+    if not isinstance(reranker_control, dict):
+        raise ValueError("reliability.degradation.rerankerControl is required")
+    requested_delay = reranker_control.get("requestedDelayMs")
+    readback_delay = reranker_control.get("readbackDelayMs")
+    configured_timeout = reranker_control.get("configuredTimeoutMs")
+    request_elapsed = reranker_control.get("requestElapsedMs")
+    if (
+        requested_delay != 500
+        or readback_delay != requested_delay
+        or configured_timeout != 200
+        or requested_delay <= configured_timeout
+        or not isinstance(request_elapsed, (int, float))
+        or request_elapsed < 0
+        or request_elapsed >= requested_delay
+        or reranker_control.get("returnedBeforeDelay") is not True
+    ):
+        raise ValueError("reranker timeout evidence must prove the 500 ms delay exceeded the 200 ms timeout")
 
     permission = reliability.get("permission")
     if not isinstance(permission, dict):
         raise ValueError("reliability.permission is required")
-    for key in ("permittedHit", "foreignPrivateAbsent", "citationsFiltered"):
+    for key in ("permittedHit", "foreignPrivateAbsent", "citationsFiltered", "answerFiltered"):
         if permission.get(key) is not True:
             raise ValueError(f"reliability.permission.{key} must be true")
+    foreign_id = str(permission.get("foreignDocumentId", "")).strip()
+    foreign_marker = str(permission.get("foreignMarker", "")).strip()
+    foreign_retrieval = permission.get("retrieval")
+    foreign_websocket = permission.get("websocket")
+    if (
+        not foreign_id
+        or not foreign_marker
+        or not isinstance(foreign_retrieval, dict)
+        or not isinstance(foreign_retrieval.get("hits"), list)
+        or not isinstance(foreign_websocket, dict)
+        or not isinstance(foreign_websocket.get("citations"), list)
+    ):
+        raise ValueError("foreign permission evidence must include the marker-specific retrieval and chat")
+    raw_permission_evidence = json.dumps(
+        {"retrieval": foreign_retrieval, "websocket": foreign_websocket},
+        ensure_ascii=False,
+    )
+    if foreign_id in raw_permission_evidence or foreign_marker in raw_permission_evidence:
+        raise ValueError("foreign private document or marker leaked into retrieval, citations, or answer")
 
     memory = reliability.get("memory")
     if not isinstance(memory, dict) or not str(memory.get("marker", "")).strip():
@@ -232,13 +269,52 @@ def _verify_reliability(report: dict, trace_id: str) -> None:
     for key in ("firstTurnStored", "secondTurnRetrieved", "durable"):
         if memory.get(key) is not True:
             raise ValueError(f"reliability.memory.{key} must be true")
+    marker = str(memory["marker"]).strip()
+    if int(memory.get("mysqlMarkerCount", 0)) < 1:
+        raise ValueError("memory marker must be present in MySQL")
+    if int(memory.get("elasticsearchMarkerCount", 0)) < 1:
+        raise ValueError("memory marker must be present in Elasticsearch")
+    readback_items = memory.get("readbackItems")
+    if not isinstance(readback_items, list) or marker not in json.dumps(readback_items, ensure_ascii=False):
+        raise ValueError("memory marker must be present in direct readback items")
     if memory.get("shortTermHistoryCleared") is not True:
         raise ValueError("reliability.memory.shortTermHistoryCleared must be true")
+    if not isinstance(memory.get("redisKeysBefore"), list) or not memory["redisKeysBefore"]:
+        raise ValueError("Redis deletion evidence must include keys found before deletion")
+    if memory.get("redisKeysAfter") != []:
+        raise ValueError("Redis deletion evidence must prove no conversation keys remained")
+
+    turns = memory.get("turns")
+    if not isinstance(turns, list) or len(turns) != 2:
+        raise ValueError("memory trace evidence must contain exactly two turns")
+    flattened_events: list[dict] = []
+    for turn_index, turn in enumerate(turns):
+        if not isinstance(turn, dict) or turn.get("traceId") != trace_id:
+            raise ValueError(f"memory turn {turn_index} traceId must match report traceId")
+        turn_events = turn.get("events")
+        if not isinstance(turn_events, list) or not turn_events:
+            raise ValueError(f"memory turn {turn_index} events are required")
+        has_chunk = False
+        has_completion = False
+        for event in turn_events:
+            if not isinstance(event, dict) or event.get("traceId") != trace_id:
+                raise ValueError(f"memory turn {turn_index} raw event traceId must match report traceId")
+            has_chunk = has_chunk or event.get("type") == "chunk"
+            has_completion = has_completion or (
+                event.get("type") == "completion" and event.get("status") == "finished"
+            )
+        if not has_chunk:
+            raise ValueError(f"memory turn {turn_index} must contain a chunk event")
+        if not has_completion:
+            raise ValueError(f"memory turn {turn_index} must contain a finished completion event")
+        flattened_events.extend(turn_events)
 
     trace = reliability.get("trace")
     events = trace.get("events") if isinstance(trace, dict) else None
     if not isinstance(events, list) or not events:
         raise ValueError("reliability.trace.events is required")
+    if events != flattened_events:
+        raise ValueError("reliability trace events must exactly flatten the two raw memory turns")
     for index, event in enumerate(events):
         if not isinstance(event, dict) or str(event.get("traceId", "")).strip() != trace_id:
             raise ValueError(f"reliability.trace.events[{index}] traceId must match report traceId")
@@ -247,10 +323,21 @@ def _verify_reliability(report: dict, trace_id: str) -> None:
 
     graph = reliability.get("graph")
     nodes = graph.get("nodes") if isinstance(graph, dict) else None
-    if nodes != GRAPH_NODES:
+    if (
+        not isinstance(nodes, list)
+        or len(nodes) != len(GRAPH_NODES)
+        or set(nodes) != set(GRAPH_NODES)
+    ):
         raise ValueError("reliability.graph.nodes must contain the exact 11-node graph")
     ordered = ["__start__", *GRAPH_NODES, "__end__"]
-    if graph.get("edges") != [[left, right] for left, right in zip(ordered, ordered[1:])]:
+    edges = graph.get("edges")
+    expected_edges = {(left, right) for left, right in zip(ordered, ordered[1:])}
+    if (
+        not isinstance(edges, list)
+        or len(edges) != len(expected_edges)
+        or any(not isinstance(edge, list) or len(edge) != 2 for edge in edges)
+        or {tuple(edge) for edge in edges} != expected_edges
+    ):
         raise ValueError("reliability.graph.edges must contain the exact linear graph")
 
 

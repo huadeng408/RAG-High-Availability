@@ -219,10 +219,11 @@ def set_model_failures(
     reranker_delay_ms: int = 0,
     timeout_seconds: float,
 ) -> dict[str, Any]:
+    requested_delay_ms = max(0, min(int(reranker_delay_ms), 30000))
     payload = json.dumps({
         "embeddings": embeddings,
         "reranker": reranker,
-        "reranker_delay_ms": max(0, min(int(reranker_delay_ms), 30000)),
+        "reranker_delay_ms": requested_delay_ms,
     }).encode("utf-8")
     request = Request(
         control_url.rstrip("/") + "/control/failures",
@@ -236,7 +237,44 @@ def set_model_failures(
         raise RuntimeError("model stub returned an invalid failure control response")
     if body.get("embeddings") is not embeddings or body.get("reranker") is not reranker:
         raise RuntimeError("model stub did not confirm requested failure state")
+    if body.get("reranker_delay_ms") != requested_delay_ms:
+        raise RuntimeError("model stub did not confirm requested reranker delay")
     return body
+
+
+def clear_redis_conversation_history(container: str, password: str) -> dict[str, Any]:
+    command = ["docker", "exec", "-e", "REDISCLI_AUTH=" + password, container, "redis-cli"]
+
+    def scan_keys() -> list[str]:
+        completed = subprocess.run(
+            [*command, "--scan", "--pattern", "conversation:*"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError("Redis conversation scan failed: " + completed.stderr.strip())
+        return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+
+    keys_before = scan_keys()
+    deleted_count = 0
+    if keys_before:
+        completed = subprocess.run(
+            [*command, "DEL", *keys_before],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode != 0 or not completed.stdout.strip().isdigit():
+            raise RuntimeError("Redis conversation deletion failed: " + completed.stderr.strip())
+        deleted_count = int(completed.stdout.strip())
+    keys_after = scan_keys()
+    return {
+        "keysBefore": keys_before,
+        "keysAfter": keys_after,
+        "deletedCount": deleted_count,
+        "cleared": bool(keys_before) and not keys_after,
+    }
 
 
 def consume_dlq_envelope(
@@ -373,6 +411,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--kafka-bootstrap-server", default="kafka:29092")
     parser.add_argument("--kafka-dlq-topic", default="file-dlq")
     parser.add_argument("--mysql-container", default="rha-e2e-mysql-1")
+    parser.add_argument("--redis-container", default="rha-e2e-redis-1")
     parser.add_argument("--orchestrator-container", default="rha-e2e-orchestrator-1")
     parser.add_argument("--admin-username", default=None)
     parser.add_argument("--admin-password", default=None)
@@ -616,14 +655,31 @@ def run_runtime(
         if user_id <= 0:
             raise RuntimeError("profile did not return an authenticated user id")
         control_url = str(getattr(args, "model_stub_control_url", "http://127.0.0.1:8010"))
+        reranker_delay_ms = 500
+        reranker_timeout_ms = 200
+        reranker_control: dict[str, Any] = {}
+        reranker_elapsed_ms = 0.0
         try:
             set_model_failures(control_url, embeddings=True, timeout_seconds=args.request_timeout)
             degraded_retrieval, _ = retrieve_and_chat(query)
             embedding_fallback = any(hit.get("fileMd5") == upload["fileMd5"] for hit in degraded_retrieval.get("hits") or [])
 
-            set_model_failures(control_url, reranker_delay_ms=500, timeout_seconds=args.request_timeout)
-            rerank_retrieval, _ = retrieve_and_chat(query)
-            reranker_fallback = any(hit.get("fileMd5") == upload["fileMd5"] for hit in rerank_retrieval.get("hits") or [])
+            reranker_control = set_model_failures(
+                control_url,
+                reranker_delay_ms=reranker_delay_ms,
+                timeout_seconds=args.request_timeout,
+            )
+            reranker_started = time.monotonic()
+            rerank_search = client.request_json(
+                "GET",
+                "/api/v1/search/hybrid?" + urlencode({"query": query, "topK": 5}),
+                token=token,
+            )
+            reranker_elapsed_ms = round((time.monotonic() - reranker_started) * 1000, 3)
+            rerank_hits = _response_data(rerank_search, "reranker timeout search")
+            if not isinstance(rerank_hits, list):
+                raise RuntimeError("reranker timeout search response data must be a list")
+            reranker_fallback = any(hit.get("fileMd5") == upload["fileMd5"] for hit in rerank_hits)
         finally:
             set_model_failures(control_url, timeout_seconds=args.request_timeout)
 
@@ -636,12 +692,10 @@ def run_runtime(
              "org_tag": "foreign-private", "is_public": False, "document_version": foreign_id,
              "modality": "text", "evidence_ids": [foreign_id]},
         )
-        foreign_search = client.request_json(
-            "GET", "/api/v1/search/hybrid?" + urlencode({"query": foreign_marker, "topK": 10}), token=token,
-        )
-        foreign_hits = _response_data(foreign_search, "foreign private search")
+        foreign_retrieval, foreign_websocket = retrieve_and_chat(foreign_marker)
+        foreign_hits = foreign_retrieval.get("hits") or []
         permitted_hit = any(hit.get("fileMd5") == upload["fileMd5"] for hit in retrieval.get("hits") or [])
-        foreign_private_absent = not any(hit.get("fileMd5") == foreign_id for hit in foreign_hits or [])
+        foreign_private_absent = not any(hit.get("fileMd5") == foreign_id for hit in foreign_hits)
         marker = "RHA-MEMORY-" + run_suffix
         _, memory_first = retrieve_and_chat("Remember this durable project marker: " + marker)
 
@@ -652,7 +706,9 @@ def run_runtime(
             db_password = os.environ.get("RHA_E2E_PASSWORD", "")
             completed = subprocess.run(
                 ["docker", "exec", "-e", "MYSQL_PWD=" + db_password, str(args.mysql_container),
-                 "mysql", "-N", "-uroot", "RHA", "-e", f"SELECT COUNT(*) FROM long_term_memories WHERE user_id={user_id};"],
+                 "mysql", "-N", "-uroot", "RHA", "-e",
+                 f"SELECT COUNT(*) FROM long_term_memories WHERE user_id={user_id} "
+                 f"AND (content LIKE '%{marker}%' OR summary LIKE '%{marker}%');"],
                 check=False, capture_output=True, text=True,
             )
             if completed.returncode == 0 and completed.stdout.strip().isdigit():
@@ -660,7 +716,8 @@ def run_runtime(
             try:
                 es_count_response = elasticsearch.request_json(
                     "POST", "/conversation_memory/_count",
-                    {"query": {"term": {"user_id": user_id}}},
+                    {"query": {"bool": {"filter": [{"term": {"user_id": user_id}}],
+                                         "must": [{"match_phrase": {"text_content": marker}}]}}},
                 )
                 es_memory_count = int((es_count_response.body or {}).get("count", 0))
             except RuntimeError:
@@ -669,14 +726,10 @@ def run_runtime(
                 break
             time.sleep(max(0.1, args.poll_interval))
         redis_password = os.environ.get("RHA_E2E_PASSWORD", "")
-        redis_env = ["docker", "exec", "-e", "REDISCLI_AUTH=" + redis_password, "rha-e2e-redis-1", "redis-cli"]
-        scan = subprocess.run(
-            [*redis_env, "--scan", "--pattern", "conversation:*"],
-            check=False, capture_output=True, text=True,
+        redis_clear = clear_redis_conversation_history(
+            str(getattr(args, "redis_container", "rha-e2e-redis-1")),
+            redis_password,
         )
-        conversation_keys = [line.strip() for line in scan.stdout.splitlines() if line.strip()]
-        for key in conversation_keys:
-            subprocess.run([*redis_env, "DEL", key], check=True, capture_output=True, text=True)
         recall_query = "What durable project marker did I ask you to remember?"
         memory_readback_response = client.request_json(
             "POST", "/internal/orchestrator/memory-search",
@@ -694,47 +747,50 @@ def run_runtime(
         if graph_probe.returncode != 0 or not graph_probe.stdout.strip():
             raise RuntimeError("failed to inspect the runtime LangGraph graph: " + graph_probe.stderr.strip())
         graph_contract = json.loads(graph_probe.stdout.strip().splitlines()[-1])
-        graph_nodes = graph_contract.get("nodes") or []
-        expected_graph_nodes = [
-            "load_history", "classify_intent", "rewrite_query", "prepare_prompt_context",
-            "retrieve_knowledge", "retrieve_memory", "fuse_context", "rerank_context",
-            "build_messages", "generate_answer", "persist_memory",
-        ]
-        expected_graph_order = ["__start__", *expected_graph_nodes, "__end__"]
-        actual_edges = {tuple(edge) for edge in graph_contract.get("edges") or []}
-        ordered_graph_edges = [
-            [left, right]
-            for left, right in zip(expected_graph_order, expected_graph_order[1:])
-            if (left, right) in actual_edges
-        ]
+        memory_items = (memory_readback or {}).get("items") or []
+        foreign_citations = foreign_websocket.get("citations") or []
+        foreign_answer = str(foreign_websocket.get("answer", ""))
         reliability = {
             "degradation": {
                 "embeddingFailureFallback": embedding_fallback,
                 "rerankerTimeoutFallback": reranker_fallback,
                 "embeddingFileMd5": upload["fileMd5"],
                 "rerankerFileMd5": upload["fileMd5"],
+                "rerankerControl": {
+                    "requestedDelayMs": reranker_delay_ms,
+                    "readbackDelayMs": reranker_control.get("reranker_delay_ms"),
+                    "configuredTimeoutMs": reranker_timeout_ms,
+                    "requestElapsedMs": reranker_elapsed_ms,
+                    "returnedBeforeDelay": reranker_elapsed_ms < reranker_delay_ms,
+                },
             },
             "permission": {
                 "permittedHit": permitted_hit,
                 "foreignPrivateAbsent": foreign_private_absent,
-                "citationsFiltered": all(citation.get("evidenceId") != foreign_id for citation in websocket.get("citations") or []),
+                "citationsFiltered": all(citation.get("evidenceId") != foreign_id for citation in foreign_citations),
+                "answerFiltered": foreign_marker not in foreign_answer and foreign_id not in foreign_answer,
                 "foreignDocumentId": foreign_id,
+                "foreignMarker": foreign_marker,
+                "retrieval": foreign_retrieval,
+                "websocket": foreign_websocket,
             },
             "memory": {
                 "marker": marker,
                 "firstTurnStored": mysql_count > 0,
                 "secondTurnRetrieved": marker in str(memory_second.get("answer", "")),
                 "durable": mysql_count > 0 and es_memory_count > 0,
-                "mysqlCount": mysql_count,
-                "elasticsearchCount": es_memory_count,
-                "shortTermHistoryCleared": bool(conversation_keys),
-                "readbackItems": (memory_readback or {}).get("items") or [],
+                "mysqlMarkerCount": mysql_count,
+                "elasticsearchMarkerCount": es_memory_count,
+                "shortTermHistoryCleared": redis_clear["cleared"],
+                "redisKeysBefore": redis_clear["keysBefore"],
+                "redisKeysAfter": redis_clear["keysAfter"],
+                "readbackItems": memory_items,
                 "turns": [memory_first, memory_second],
             },
             "trace": {"events": (memory_first.get("events") or []) + (memory_second.get("events") or [])},
             "graph": {
-                "nodes": [name for name in expected_graph_nodes if name in graph_nodes],
-                "edges": ordered_graph_edges,
+                "nodes": graph_contract.get("nodes") or [],
+                "edges": graph_contract.get("edges") or [],
             },
         }
 

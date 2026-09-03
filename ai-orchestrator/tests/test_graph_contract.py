@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from unittest.mock import patch
 
@@ -7,6 +8,7 @@ from langchain_core.documents import Document
 
 from app.config import ModelSettings, Settings
 from app.graph import build_graph
+from app.models import PromptContextResponse, SessionResponse
 
 
 class GraphContractTests(unittest.IsolatedAsyncioTestCase):
@@ -65,6 +67,54 @@ class GraphContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("lexical fallback", result["context_items"][0]["text"])
         self.assertTrue(result["rerank_skipped"])
         self.assertTrue(result["rerank_timed_out"])
+
+    async def test_empty_failed_and_canceled_generation_do_not_persist(self) -> None:
+        class RecordingBackend:
+            def __init__(self) -> None:
+                self.persisted = []
+
+            async def load_session(self, _user_id):
+                return SessionResponse(conversationId="conversation-1", history=[])
+
+            async def prepare_prompt_context(self, _payload):
+                return PromptContextResponse(conversationId="conversation-1")
+
+            async def persist_turn(self, payload):
+                self.persisted.append(payload)
+
+        class EmptyModel:
+            async def astream(self, _messages):
+                if False:
+                    yield None
+
+        class FailedModel:
+            async def astream(self, _messages):
+                raise RuntimeError("generation failed")
+                yield None
+
+        class CanceledModel:
+            async def astream(self, _messages):
+                raise asyncio.CancelledError()
+                yield None
+
+        scenarios = (
+            (EmptyModel(), None),
+            (FailedModel(), RuntimeError),
+            (CanceledModel(), asyncio.CancelledError),
+        )
+        for model, error in scenarios:
+            backend = RecordingBackend()
+            with self.subTest(model=type(model).__name__), patch(
+                "app.graph._build_model",
+                side_effect=[object(), model],
+            ):
+                graph = build_graph(self.settings(), backend)
+                if error is None:
+                    await graph.ainvoke({"query": "hello", "user": {"id": 1}})
+                else:
+                    with self.assertRaises(error):
+                        await graph.ainvoke({"query": "hello", "user": {"id": 1}})
+                self.assertEqual([], backend.persisted)
 
 
 if __name__ == "__main__":

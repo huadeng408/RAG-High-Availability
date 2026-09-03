@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from email import policy
 from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,6 +33,37 @@ def load_runtime_module():
 
 
 class RuntimeE2ETest(unittest.TestCase):
+    def test_model_failure_control_requires_reranker_delay_readback(self) -> None:
+        runtime = load_runtime_module()
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps({"embeddings": False, "reranker": False, "reranker_delay_ms": 0}).encode()
+
+        with patch.object(runtime, "urlopen", return_value=Response()):
+            with self.assertRaisesRegex(RuntimeError, "delay"):
+                runtime.set_model_failures("http://stub", reranker_delay_ms=500, timeout_seconds=1)
+
+    def test_redis_clear_requires_post_delete_absence_readback(self) -> None:
+        runtime = load_runtime_module()
+        responses = iter(
+            [
+                SimpleNamespace(returncode=0, stdout="conversation:1\n", stderr=""),
+                SimpleNamespace(returncode=0, stdout="1\n", stderr=""),
+                SimpleNamespace(returncode=0, stdout="conversation:1\n", stderr=""),
+            ]
+        )
+        with patch.object(runtime.subprocess, "run", side_effect=lambda *_args, **_kwargs: next(responses)):
+            result = runtime.clear_redis_conversation_history("container", "password")
+        self.assertFalse(result["cleared"])
+        self.assertEqual(result["keysAfter"], ["conversation:1"])
+
     def test_run_runtime_exercises_api_and_writes_secret_free_report(self) -> None:
         runtime = load_runtime_module()
         observed: dict[str, object] = {

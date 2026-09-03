@@ -164,13 +164,55 @@ def recovery_report() -> dict:
 def reliability_report() -> dict:
     report = recovery_report()
     report["schemaVersion"] = 4
+    first_events = [
+        {"type": "chunk", "chunk": "Remembered RHA-MEMORY-1", "traceId": "runtime-trace"},
+        {"type": "completion", "status": "finished", "traceId": "runtime-trace", "citations": []},
+    ]
+    second_events = [
+        {"type": "chunk", "chunk": "RHA-MEMORY-1", "traceId": "runtime-trace"},
+        {"type": "completion", "status": "finished", "traceId": "runtime-trace", "citations": []},
+    ]
     report["reliability"] = {
-        "degradation": {"embeddingFailureFallback": True, "rerankerTimeoutFallback": True},
-        "permission": {"permittedHit": True, "foreignPrivateAbsent": True, "citationsFiltered": True},
-        "memory": {"marker": "RHA-MEMORY-1", "firstTurnStored": True, "secondTurnRetrieved": True, "durable": True, "shortTermHistoryCleared": True},
-        "trace": {"events": [{"type": "chunk", "traceId": "runtime-trace"}, {"type": "completion", "traceId": "runtime-trace"}]},
+        "degradation": {
+            "embeddingFailureFallback": True,
+            "rerankerTimeoutFallback": True,
+            "rerankerControl": {
+                "requestedDelayMs": 500,
+                "readbackDelayMs": 500,
+                "configuredTimeoutMs": 200,
+                "requestElapsedMs": 220,
+                "returnedBeforeDelay": True,
+            },
+        },
+        "permission": {
+            "permittedHit": True,
+            "foreignPrivateAbsent": True,
+            "citationsFiltered": True,
+            "answerFiltered": True,
+            "foreignDocumentId": "foreign-private-1",
+            "foreignMarker": "FOREIGN-PRIVATE-1",
+            "retrieval": {"hits": []},
+            "websocket": {"answer": "No permitted evidence.", "citations": []},
+        },
+        "memory": {
+            "marker": "RHA-MEMORY-1",
+            "firstTurnStored": True,
+            "secondTurnRetrieved": True,
+            "durable": True,
+            "shortTermHistoryCleared": True,
+            "mysqlMarkerCount": 1,
+            "elasticsearchMarkerCount": 1,
+            "redisKeysBefore": ["conversation:1"],
+            "redisKeysAfter": [],
+            "readbackItems": [{"text": "Durable marker RHA-MEMORY-1"}],
+            "turns": [
+                {"traceId": "runtime-trace", "answer": "Remembered RHA-MEMORY-1", "events": first_events},
+                {"traceId": "runtime-trace", "answer": "RHA-MEMORY-1", "events": second_events},
+            ],
+        },
+        "trace": {"events": first_events + second_events},
         "graph": {
-            "nodes": VERIFY_MODULE.GRAPH_NODES,
+            "nodes": list(VERIFY_MODULE.GRAPH_NODES),
             "edges": [[left, right] for left, right in zip(
                 ["__start__", *VERIFY_MODULE.GRAPH_NODES, "__end__"],
                 ["__start__", *VERIFY_MODULE.GRAPH_NODES, "__end__"][1:],
@@ -196,6 +238,79 @@ class VerifyRhaE2ETest(unittest.TestCase):
                 path = Path(directory) / "report.json"
                 path.write_text(json.dumps(report), encoding="utf-8")
                 with self.assertRaises(ValueError):
+                    VERIFY_MODULE.verify(path)
+
+    def test_rejects_memory_without_marker_specific_durable_evidence(self) -> None:
+        mutations = (
+            lambda memory: memory.update(mysqlMarkerCount=0),
+            lambda memory: memory.update(elasticsearchMarkerCount=0),
+            lambda memory: memory.update(readbackItems=[{"text": "unrelated memory"}]),
+        )
+        for mutate in mutations:
+            report = reliability_report()
+            mutate(report["reliability"]["memory"])
+            with self.subTest(report=report), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "report.json"
+                path.write_text(json.dumps(report), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "marker"):
+                    VERIFY_MODULE.verify(path)
+
+    def test_rejects_memory_without_redis_absence_readback(self) -> None:
+        report = reliability_report()
+        report["reliability"]["memory"]["redisKeysAfter"] = ["conversation:1"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Redis"):
+                VERIFY_MODULE.verify(path)
+
+    def test_rejects_permission_evidence_from_unrelated_chat(self) -> None:
+        report = reliability_report()
+        report["reliability"]["permission"]["websocket"]["answer"] = "FOREIGN-PRIVATE-1"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "foreign"):
+                VERIFY_MODULE.verify(path)
+
+    def test_rejects_extra_raw_runtime_graph_node_or_edge(self) -> None:
+        for field, extra in (("nodes", "extra_node"), ("edges", ["load_history", "extra_node"])):
+            report = reliability_report()
+            report["reliability"]["graph"][field].append(extra)
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "report.json"
+                path.write_text(json.dumps(report), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "exact"):
+                    VERIFY_MODULE.verify(path)
+
+    def test_rejects_trace_flattening_that_omits_or_masks_raw_turn_events(self) -> None:
+        mutations = (
+            lambda reliability: reliability["trace"]["events"].pop(0),
+            lambda reliability: reliability["memory"]["turns"][0]["events"][0].update(traceId="wrong"),
+            lambda reliability: reliability["memory"]["turns"][1]["events"].pop(),
+        )
+        for mutate in mutations:
+            report = reliability_report()
+            mutate(report["reliability"])
+            with self.subTest(report=report), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "report.json"
+                path.write_text(json.dumps(report), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "trace|turn|completion"):
+                    VERIFY_MODULE.verify(path)
+
+    def test_rejects_reranker_timeout_without_delay_readback_and_early_return(self) -> None:
+        mutations = (
+            lambda control: control.update(readbackDelayMs=0),
+            lambda control: control.update(returnedBeforeDelay=False),
+            lambda control: control.update(requestElapsedMs=600),
+        )
+        for mutate in mutations:
+            report = reliability_report()
+            mutate(report["reliability"]["degradation"]["rerankerControl"])
+            with self.subTest(report=report), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "report.json"
+                path.write_text(json.dumps(report), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "reranker"):
                     VERIFY_MODULE.verify(path)
     def test_rejects_report_without_image_runtime_path(self) -> None:
         report = runtime_report()
