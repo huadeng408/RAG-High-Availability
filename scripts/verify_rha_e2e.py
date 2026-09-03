@@ -297,7 +297,9 @@ def _verify_reliability(report: dict) -> None:
         raise ValueError("reliability.brokerOutage pipeline must become SEARCHABLE with an immutable version")
     stages = {item.get("stage"): item for item in pipeline.get("stages") or []}
     if set(stages) != REQUIRED_STAGES or any(
-        stages[name].get("status") != "SUCCESS" or int(stages[name].get("attemptCount", 0)) < 1
+        stages[name].get("status") != "SUCCESS"
+        or type(stages[name].get("attemptCount")) is not int
+        or stages[name]["attemptCount"] < 1
         for name in REQUIRED_STAGES
     ):
         raise ValueError("reliability.brokerOutage pipeline must contain four successful stages")

@@ -342,6 +342,18 @@ class VerifyRhaE2ETest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "brokerOutage"):
                     VERIFY_MODULE.verify(path)
 
+    def test_rejects_non_integer_broker_stage_attempt_counts(self) -> None:
+        for malformed_count in ("1", 1.0, True):
+            report = reliability_report()
+            report["reliability"]["brokerOutage"]["pipeline"]["stages"][0][
+                "attemptCount"
+            ] = malformed_count
+            with self.subTest(attemptCount=malformed_count), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "report.json"
+                path.write_text(json.dumps(report), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "brokerOutage"):
+                    VERIFY_MODULE.verify(path)
+
     def test_rejects_memory_without_marker_specific_durable_evidence(self) -> None:
         mutations = (
             lambda memory: memory.update(mysqlMarkerCount=0),
