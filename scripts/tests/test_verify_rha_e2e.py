@@ -244,6 +244,57 @@ def reliability_report() -> dict:
                 ["__start__", *VERIFY_MODULE.GRAPH_NODES, "__end__"][1:],
             )],
         },
+        "brokerOutage": {
+            "brokerStopped": True,
+            "outboxPersisted": True,
+            "automaticRecovery": True,
+            "mergeRequestCount": 1,
+            "upload": {
+                "fileMd5": "0123456789abcdef0123456789abcdef",
+                "merge": {"statusCode": 200, "traceId": "broker-trace"},
+            },
+            "publicationBeforeRecovery": {
+                "status": "PENDING",
+                "publicationAttemptCount": 1,
+                "processingAttemptCount": 0,
+                "published": False,
+                "lastErrorPresent": True,
+            },
+            "publicationAfterRecovery": {
+                "status": "PUBLISHED",
+                "publicationAttemptCount": 2,
+                "processingAttemptCount": 1,
+                "published": True,
+                "lastErrorPresent": False,
+            },
+            "pipeline": {
+                "status": "SEARCHABLE",
+                "documentVersion": "broker-version",
+                "stages": [
+                    {"stage": stage, "status": "SUCCESS", "attemptCount": 1}
+                    for stage in ("parse", "chunk", "embed", "index")
+                ],
+            },
+            "retrieval": {
+                "hits": [{
+                    "fileMd5": "0123456789abcdef0123456789abcdef",
+                    "documentVersion": "broker-version",
+                    "citations": [{"evidenceId": "broker-evidence"}],
+                }],
+            },
+            "websocket": {
+                "answer": "Recovered from durable outbox.",
+                "citations": [{"evidenceId": "broker-evidence"}],
+            },
+            "elasticsearch": {
+                "knowledgeCount": 1,
+                "uniqueKnowledgeUnits": 1,
+                "evidenceCount": 1,
+                "uniqueEvidenceUnits": 1,
+                "knowledgeIds": ["broker-knowledge"],
+                "evidenceIds": ["broker-evidence"],
+            },
+        },
     }
     return report
 
@@ -257,13 +308,38 @@ class VerifyRhaE2ETest(unittest.TestCase):
             VERIFY_MODULE.verify(path)
 
     def test_rejects_schema_v4_when_each_reliability_dimension_is_missing(self) -> None:
-        for dimension in ("degradation", "permission", "memory", "trace", "graph"):
+        for dimension in ("degradation", "permission", "memory", "trace", "graph", "brokerOutage"):
             report = reliability_report()
             del report["reliability"][dimension]
             with self.subTest(dimension=dimension), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "report.json"
                 path.write_text(json.dumps(report), encoding="utf-8")
                 with self.assertRaises(ValueError):
+                    VERIFY_MODULE.verify(path)
+
+    def test_rejects_malformed_broker_outage_evidence(self) -> None:
+        mutations = (
+            lambda outage: outage.update(brokerStopped=False),
+            lambda outage: outage.update(mergeRequestCount=2),
+            lambda outage: outage["publicationBeforeRecovery"].update(processingAttemptCount=1),
+            lambda outage: outage["publicationAfterRecovery"].update(publicationAttemptCount=1),
+            lambda outage: outage["pipeline"].update(status="PROCESSING"),
+            lambda outage: outage["pipeline"].update(documentVersion="upload:" + outage["upload"]["fileMd5"]),
+            lambda outage: outage["retrieval"].update(hits=[]),
+            lambda outage: outage["websocket"].update(answer=""),
+            lambda outage: outage["websocket"].update(citations=[{"evidenceId": "other"}]),
+            lambda outage: outage["elasticsearch"].update(knowledgeCount=0, uniqueKnowledgeUnits=0),
+            lambda outage: outage["elasticsearch"].update(knowledgeIds=["duplicate", "duplicate"]),
+            lambda outage: outage["elasticsearch"].pop("evidenceIds"),
+            lambda outage: outage["elasticsearch"].update(evidenceIds=[]),
+        )
+        for mutate in mutations:
+            report = reliability_report()
+            mutate(report["reliability"]["brokerOutage"])
+            with self.subTest(mutate=mutate), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "report.json"
+                path.write_text(json.dumps(report), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "brokerOutage"):
                     VERIFY_MODULE.verify(path)
 
     def test_rejects_memory_without_marker_specific_durable_evidence(self) -> None:

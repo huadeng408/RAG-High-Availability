@@ -256,6 +256,87 @@ def _verify_reliability(report: dict) -> None:
     if not isinstance(reliability, dict):
         raise ValueError("reliability object is required for schema v4")
 
+    broker = reliability.get("brokerOutage")
+    if not isinstance(broker, dict):
+        raise ValueError("reliability.brokerOutage is required")
+    for key in ("brokerStopped", "outboxPersisted", "automaticRecovery"):
+        if broker.get(key) is not True:
+            raise ValueError(f"reliability.brokerOutage.{key} must be true")
+    if broker.get("mergeRequestCount") != 1:
+        raise ValueError("reliability.brokerOutage.mergeRequestCount must be exactly one")
+    upload = broker.get("upload") or {}
+    file_md5 = str(upload.get("fileMd5", ""))
+    if not re.fullmatch(r"[0-9a-f]{32}", file_md5):
+        raise ValueError("reliability.brokerOutage.upload.fileMd5 must be a lowercase MD5 digest")
+    merge = upload.get("merge") or {}
+    if merge.get("statusCode") != 200 or not str(merge.get("traceId", "")).strip():
+        raise ValueError("reliability.brokerOutage.upload.merge must prove one successful merge")
+    before = broker.get("publicationBeforeRecovery") or {}
+    after = broker.get("publicationAfterRecovery") or {}
+    before_attempts = before.get("publicationAttemptCount")
+    after_attempts = after.get("publicationAttemptCount")
+    if (
+        before.get("status") != "PENDING"
+        or type(before_attempts) is not int or before_attempts < 1
+        or before.get("processingAttemptCount") != 0
+        or before.get("published") is not False
+        or before.get("lastErrorPresent") is not True
+    ):
+        raise ValueError("reliability.brokerOutage before-recovery publication state is invalid")
+    if (
+        after.get("status") != "PUBLISHED"
+        or type(after_attempts) is not int or after_attempts <= before_attempts
+        or type(after.get("processingAttemptCount")) is not int or after["processingAttemptCount"] < 1
+        or after.get("published") is not True
+        or after.get("lastErrorPresent") is not False
+    ):
+        raise ValueError("reliability.brokerOutage after-recovery publication state is invalid")
+    pipeline = broker.get("pipeline") or {}
+    document_version = str(pipeline.get("documentVersion", "")).strip()
+    if pipeline.get("status") != "SEARCHABLE" or not document_version or document_version == "upload:" + file_md5:
+        raise ValueError("reliability.brokerOutage pipeline must become SEARCHABLE with an immutable version")
+    stages = {item.get("stage"): item for item in pipeline.get("stages") or []}
+    if set(stages) != REQUIRED_STAGES or any(
+        stages[name].get("status") != "SUCCESS" or int(stages[name].get("attemptCount", 0)) < 1
+        for name in REQUIRED_STAGES
+    ):
+        raise ValueError("reliability.brokerOutage pipeline must contain four successful stages")
+    retrieval = broker.get("retrieval") or {}
+    hits = retrieval.get("hits")
+    matching_hits = [hit for hit in hits or [] if hit.get("fileMd5") == file_md5 and hit.get("documentVersion") == document_version]
+    websocket = broker.get("websocket") or {}
+    if not matching_hits:
+        raise ValueError("reliability.brokerOutage retrieval must contain the recovered file and version")
+    if not str(websocket.get("answer", "")).strip():
+        raise ValueError("reliability.brokerOutage websocket answer must be non-empty")
+    retrieval_evidence = {citation.get("evidenceId") for hit in matching_hits for citation in hit.get("citations") or [] if citation.get("evidenceId")}
+    websocket_evidence = {citation.get("evidenceId") for citation in websocket.get("citations") or [] if citation.get("evidenceId")}
+    if not retrieval_evidence.intersection(websocket_evidence):
+        raise ValueError("reliability.brokerOutage websocket citations must intersect retrieval evidence")
+    counts = broker.get("elasticsearch") or {}
+    knowledge = counts.get("knowledgeCount")
+    evidence = counts.get("evidenceCount")
+    if (
+        type(knowledge) is not int or knowledge < 1 or counts.get("uniqueKnowledgeUnits") != knowledge
+        or type(evidence) is not int or evidence < 1 or counts.get("uniqueEvidenceUnits") != evidence
+    ):
+        raise ValueError("reliability.brokerOutage Elasticsearch counts must be positive and duplicate-free")
+    identity_contracts = (
+        ("knowledgeIds", knowledge),
+        ("evidenceIds", evidence),
+    )
+    for field, expected_count in identity_contracts:
+        identities = counts.get(field)
+        if (
+            not isinstance(identities, list)
+            or len(identities) != expected_count
+            or len(identities) != len(set(identities))
+            or any(not str(identity).strip() for identity in identities)
+        ):
+            raise ValueError(
+                f"reliability.brokerOutage Elasticsearch {field} must contain all unique persisted identities"
+            )
+
     degradation = reliability.get("degradation")
     if not isinstance(degradation, dict):
         raise ValueError("reliability.degradation is required")

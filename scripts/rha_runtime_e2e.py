@@ -9,13 +9,15 @@ import io
 import json
 import mimetypes
 import os
+import re
 import secrets
 import subprocess
 import struct
 import time
 import zipfile
 import zlib
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -210,6 +212,242 @@ def set_model_embedding_failure(control_url: str, enabled: bool, *, timeout_seco
     if not isinstance(body, dict) or body.get("embeddings") is not enabled:
         raise RuntimeError("model stub did not confirm embedding failure state")
     return body
+
+
+def _docker_run(command: list[str], *, timeout_seconds: float) -> subprocess.CompletedProcess[str]:
+    display_command = [
+        argument.split("=", 1)[0] + "=<redacted>"
+        if argument.startswith(("MYSQL_PWD=", "REDISCLI_AUTH="))
+        else argument
+        for argument in command
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(
+            f"command {' '.join(display_command)} timed out after {timeout_seconds:g} seconds"
+        ) from exc
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        raise RuntimeError(f"command failed ({' '.join(display_command)}): {detail or 'no output'}")
+    return completed
+
+
+def set_kafka_broker_running(
+    container: str,
+    running: bool,
+    *,
+    bootstrap_server: str,
+    timeout_seconds: float,
+    poll_interval: float,
+) -> dict[str, bool]:
+    container = container.strip()
+    if not container:
+        raise RuntimeError("Kafka container name is required")
+    name = _docker_run(["docker", "inspect", "--format", "{{.Name}}", container], timeout_seconds=timeout_seconds)
+    if name.stdout.strip().lstrip("/") != container:
+        raise RuntimeError(f"Kafka container identity mismatch: expected {container!r}, got {name.stdout.strip()!r}")
+
+    desired = "true" if running else "false"
+    deadline = time.monotonic() + timeout_seconds
+    action = "start" if running else "stop"
+    _docker_run(["docker", action, container], timeout_seconds=timeout_seconds)
+    while True:
+        state = _docker_run(
+            ["docker", "inspect", "--format", "{{.State.Running}}", container],
+            timeout_seconds=timeout_seconds,
+        ).stdout.strip().lower()
+        if state == desired:
+            break
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Kafka broker did not reach running={desired}; last state={state!r}")
+        time.sleep(max(0.0, poll_interval))
+
+    if not running:
+        return {"running": False, "ready": False}
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Kafka broker did not become ready: readiness deadline expired")
+        try:
+            readiness = subprocess.run(
+                ["docker", "exec", container, "kafka-topics", "--bootstrap-server", bootstrap_server, "--list"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=max(0.1, min(timeout_seconds, remaining)),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError("Kafka broker readiness command timed out") from exc
+        if readiness.returncode == 0:
+            return {"running": True, "ready": True}
+        if time.monotonic() >= deadline:
+            detail = (readiness.stderr or readiness.stdout).strip()
+            raise TimeoutError(f"Kafka broker did not become ready: {detail or 'topic listing failed'}")
+        time.sleep(max(0.0, poll_interval))
+
+
+@contextmanager
+def kafka_broker_outage(
+    container: str,
+    *,
+    bootstrap_server: str,
+    timeout_seconds: float,
+    poll_interval: float,
+) -> Iterator[dict[str, Any]]:
+    try:
+        stopped = set_kafka_broker_running(
+            container,
+            False,
+            bootstrap_server=bootstrap_server,
+            timeout_seconds=timeout_seconds,
+            poll_interval=poll_interval,
+        )
+    except BaseException as stop_error:
+        try:
+            set_kafka_broker_running(
+                container,
+                True,
+                bootstrap_server=bootstrap_server,
+                timeout_seconds=timeout_seconds,
+                poll_interval=poll_interval,
+            )
+        except Exception as recovery_error:
+            stop_error.add_note(f"Kafka recovery also failed: {recovery_error}")
+        raise
+    state: dict[str, Any] = {"stopped": stopped}
+    primary_error: BaseException | None = None
+    try:
+        yield state
+    except BaseException as exc:
+        primary_error = exc
+        raise
+    finally:
+        try:
+            state["started"] = set_kafka_broker_running(
+                container,
+                True,
+                bootstrap_server=bootstrap_server,
+                timeout_seconds=timeout_seconds,
+                poll_interval=poll_interval,
+            )
+        except Exception as recovery_error:
+            if primary_error is None:
+                raise
+            primary_error.add_note(f"Kafka recovery also failed: {recovery_error}")
+
+
+def _parse_outbox_state(row: list[str]) -> dict[str, Any]:
+    if len(row) != 5:
+        raise ValueError(f"expected five outbox columns, got {len(row)}")
+    try:
+        publication_attempt_count = int(row[1])
+        processing_attempt_count = int(row[2])
+    except ValueError as exc:
+        raise ValueError("outbox attempt counts must be integers") from exc
+    return {
+        "status": row[0].strip(),
+        "publicationAttemptCount": publication_attempt_count,
+        "processingAttemptCount": processing_attempt_count,
+        "published": row[3].strip().upper() not in {"", "NULL"},
+        "lastErrorPresent": bool(row[4].strip()),
+    }
+
+
+def wait_for_outbox_state(
+    fetch_row: Callable[[], list[str]],
+    *,
+    phase: str,
+    timeout_seconds: float,
+    poll_interval: float,
+    previous_publication_attempt_count: int = 0,
+) -> tuple[dict[str, Any], int]:
+    if phase not in {"before-recovery", "after-recovery"}:
+        raise ValueError(f"unsupported outbox phase: {phase}")
+    deadline = time.monotonic() + timeout_seconds
+    polls = 0
+    last_observation: object = None
+    while True:
+        row = fetch_row()
+        polls += 1
+        last_observation = row
+        try:
+            state = _parse_outbox_state(row)
+        except ValueError:
+            state = None
+        if state is not None:
+            if phase == "before-recovery":
+                matched = (
+                    state["status"] == "PENDING"
+                    and state["publicationAttemptCount"] >= 1
+                    and state["processingAttemptCount"] == 0
+                    and state["published"] is False
+                    and state["lastErrorPresent"] is True
+                )
+            else:
+                matched = (
+                    state["status"] == "PUBLISHED"
+                    and state["publicationAttemptCount"] > previous_publication_attempt_count
+                    and state["processingAttemptCount"] >= 1
+                    and state["published"] is True
+                    and state["lastErrorPresent"] is False
+                )
+            if matched:
+                return state, polls
+            last_observation = state
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"broker outage {phase} outbox state was not observed; last observation={last_observation!r}"
+            )
+        time.sleep(max(0.0, poll_interval))
+
+
+def read_elasticsearch_uniqueness(
+    elasticsearch: RuntimeHTTPClient,
+    file_md5: str,
+) -> dict[str, Any]:
+    dimensions = (
+        ("knowledge", "rha-knowledge-active", "vector_id", "knowledgeCount", "uniqueKnowledgeUnits", "knowledgeIds"),
+        ("evidence", "rha-evidence-active", "evidence_id", "evidenceCount", "uniqueEvidenceUnits", "evidenceIds"),
+    )
+    summary: dict[str, Any] = {}
+    for label, alias, source_field, count_field, unique_field, ids_field in dimensions:
+        response = elasticsearch.request_json(
+            "POST",
+            f"/{alias}/_search",
+            {
+                "size": 10000,
+                "_source": [source_field],
+                "query": {"term": {"file_md5": file_md5}},
+            },
+        )
+        hits = ((response.body or {}).get("hits") or {}).get("hits")
+        if not isinstance(hits, list):
+            raise RuntimeError(f"invalid Elasticsearch {label} search response")
+        identities: list[str] = []
+        for hit in hits:
+            source = hit.get("_source") if isinstance(hit, dict) else None
+            identity = str((source or {}).get(source_field) or (hit or {}).get("_id") or "").strip()
+            if not identity:
+                raise RuntimeError(f"Elasticsearch {label} hit is missing a persisted identity")
+            identities.append(identity)
+        unique_count = len(set(identities))
+        if not identities:
+            raise RuntimeError(f"Elasticsearch {label} count is zero after broker recovery")
+        if unique_count != len(identities):
+            raise RuntimeError(f"Elasticsearch contains duplicate {label} identities after broker recovery")
+        summary.update({
+            count_field: len(identities),
+            unique_field: unique_count,
+            ids_field: identities,
+        })
+    return summary
 
 
 def set_model_failures(
@@ -436,6 +674,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--websocket-timeout", type=float, default=120.0)
     parser.add_argument("--exercise-replay", action="store_true")
     parser.add_argument("--exercise-reliability", action="store_true")
+    parser.add_argument("--exercise-broker-outage", action="store_true")
     parser.add_argument("--model-stub-control-url", default="http://127.0.0.1:8010")
     parser.add_argument("--kafka-container", default="rha-e2e-kafka-1")
     parser.add_argument("--kafka-bootstrap-server", default="kafka:29092")
@@ -446,6 +685,15 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--admin-username", default=None)
     parser.add_argument("--admin-password", default=None)
     return parser
+
+
+def validate_runtime_args(args: argparse.Namespace) -> None:
+    reliability = bool(getattr(args, "exercise_reliability", False))
+    broker_outage = bool(getattr(args, "exercise_broker_outage", False))
+    if reliability != broker_outage:
+        raise RuntimeError(
+            "--exercise-reliability and --exercise-broker-outage must be used together"
+        )
 
 
 def resolve_admin_credentials(args: argparse.Namespace) -> tuple[str, str]:
@@ -567,6 +815,7 @@ def run_runtime(
     trace_id: str = "",
     websocket_connect: Callable[..., Any] | None = None,
 ) -> int:
+    validate_runtime_args(args)
     trace_id = trace_id.strip() or "rha-e2e-" + secrets.token_hex(12)
     run_suffix = secrets.token_hex(6)
     username = "rha-e2e-" + run_suffix
@@ -657,7 +906,10 @@ def run_runtime(
                 raise RuntimeError("pipeline status response data must be an object")
             return data
 
-        if wait_mode == "dead_letter":
+        if wait_mode == "observed":
+            pipeline_status = fetch_pipeline_status()
+            poll_count = 1
+        elif wait_mode == "dead_letter":
             pipeline_status, poll_count = wait_for_dead_letter(
                 fetch_pipeline_status,
                 stage="embed",
@@ -761,6 +1013,7 @@ def run_runtime(
             "/api/v1/search/hybrid?" + urlencode({"query": document_query, "topK": 5}),
             token=token,
         )
+
         hits = _response_data(search, "hybrid search")
         if not isinstance(hits, list):
             raise RuntimeError("hybrid search response data must be a list")
@@ -797,6 +1050,89 @@ def run_runtime(
 
     retrieval, websocket = retrieve_and_chat(query)
     image_retrieval, image_websocket = retrieve_and_chat(image_query)
+
+    broker_outage: dict[str, Any] | None = None
+    if bool(getattr(args, "exercise_broker_outage", False)):
+        broker_file = f"rha-broker-outage-{run_suffix}.txt"
+        broker_contents = f"RHA broker outage recovery marker {run_suffix}.".encode("utf-8")
+        broker_md5 = hashlib.md5(broker_contents).hexdigest()
+        if not re.fullmatch(r"[0-9a-f]{32}", broker_md5):
+            raise RuntimeError("broker outage file identity is not a lowercase MD5 digest")
+        db_password = os.environ.get("RHA_E2E_PASSWORD", "")
+        if not db_password:
+            raise RuntimeError("RHA_E2E_PASSWORD is required for broker outage outbox readback")
+        outbox_query = (
+            "SELECT publication_status, publication_attempt_count, attempt_count, published_at, publication_last_error "
+            "FROM pipeline_task "
+            f"WHERE file_md5='{broker_md5}' AND stage='parse' ORDER BY id DESC LIMIT 1;"
+        )
+
+        def read_outbox() -> list[str]:
+            output = _docker_run(
+                [
+                    "docker", "exec", "-e", "MYSQL_PWD=" + db_password,
+                    str(getattr(args, "mysql_container", "rha-e2e-mysql-1")),
+                    "mysql", "-N", "-uroot", "RHA", "-e", outbox_query,
+                ],
+                timeout_seconds=args.request_timeout,
+            ).stdout.strip()
+            return output.split("\t") if output else []
+
+        with kafka_broker_outage(
+            str(getattr(args, "kafka_container", "rha-e2e-kafka-1")),
+            bootstrap_server=str(getattr(args, "kafka_bootstrap_server", "kafka:29092")),
+            timeout_seconds=args.pipeline_timeout,
+            poll_interval=args.poll_interval,
+        ) as broker_state:
+            broker_upload, _ = upload_and_wait(
+                broker_file,
+                broker_contents,
+                "text/plain",
+                wait_mode="observed",
+            )
+            before_state, _ = wait_for_outbox_state(
+                read_outbox,
+                phase="before-recovery",
+                timeout_seconds=args.pipeline_timeout,
+                poll_interval=args.poll_interval,
+            )
+
+        broker_pipeline, broker_poll_count = wait_for_searchable(
+            lambda: _response_data(
+                client.request_json(
+                    "GET",
+                    "/api/v1/documents/pipeline-status?" + urlencode({"fileMd5": broker_md5}),
+                    token=token,
+                ),
+                "broker outage pipeline status",
+            ),
+            timeout_seconds=args.pipeline_timeout,
+            poll_interval=args.poll_interval,
+        )
+        after_state, _ = wait_for_outbox_state(
+            read_outbox,
+            phase="after-recovery",
+            previous_publication_attempt_count=before_state["publicationAttemptCount"],
+            timeout_seconds=args.pipeline_timeout,
+            poll_interval=args.poll_interval,
+        )
+        broker_retrieval, broker_websocket = retrieve_and_chat(
+            "RHA broker outage recovery marker"
+        )
+        broker_elasticsearch = read_elasticsearch_uniqueness(elasticsearch, broker_md5)
+        broker_outage = {
+            "brokerStopped": broker_state["stopped"] == {"running": False, "ready": False},
+            "outboxPersisted": True,
+            "automaticRecovery": broker_state.get("started") == {"running": True, "ready": True},
+            "mergeRequestCount": 1,
+            "upload": broker_upload,
+            "publicationBeforeRecovery": before_state,
+            "publicationAfterRecovery": after_state,
+            "pipeline": {**broker_pipeline, "pollCount": broker_poll_count},
+            "retrieval": broker_retrieval,
+            "websocket": broker_websocket,
+            "elasticsearch": broker_elasticsearch,
+        }
 
     reliability: dict[str, Any] | None = None
     if bool(getattr(args, "exercise_reliability", False)):
@@ -944,6 +1280,8 @@ def run_runtime(
                 "edges": graph_contract.get("edges") or [],
             },
         }
+        if broker_outage is not None:
+            reliability["brokerOutage"] = broker_outage
 
     recovery: dict[str, Any] | None = None
     if bool(getattr(args, "exercise_replay", False)):

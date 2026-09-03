@@ -766,21 +766,22 @@ func weightedContextScore(item ContextSnippet) float64 {
 
 // dedupeContextSnippets handles dedupe context snippets.
 func dedupeContextSnippets(items []ContextSnippet) []ContextSnippet {
-	seen := make(map[string]ContextSnippet, len(items))
+	positions := make(map[string]int, len(items))
+	result := make([]ContextSnippet, 0, len(items))
 	for _, item := range items {
 		if strings.TrimSpace(item.Text) == "" {
 			continue
 		}
 		key := item.SourceType + ":" + item.ID
-		existing, ok := seen[key]
-		if !ok || item.Score > existing.Score {
-			seen[key] = item
+		position, ok := positions[key]
+		if !ok {
+			positions[key] = len(result)
+			result = append(result, item)
+			continue
 		}
-	}
-
-	result := make([]ContextSnippet, 0, len(seen))
-	for _, item := range seen {
-		result = append(result, item)
+		if item.Score > result[position].Score {
+			result[position] = item
+		}
 	}
 	return result
 }

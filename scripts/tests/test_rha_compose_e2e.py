@@ -15,6 +15,21 @@ COMPOSE_FILE = ROOT / "deployments" / "docker-compose.rha-e2e.yaml"
 
 
 class RhaComposeE2ETest(unittest.TestCase):
+    def test_container_entrypoints_are_checked_out_with_lf_endings(self) -> None:
+        completed = subprocess.run(
+            ["git", "check-attr", "eol", "--", "deployments/e2e/mineru-e2e"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(
+            completed.stdout.strip(),
+            "deployments/e2e/mineru-e2e: eol: lf",
+        )
+
     def test_runner_resolves_host_paths_before_starting_compose(self) -> None:
         git_bash = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git" / "bin" / "bash.exe"
         bash = str(git_bash) if git_bash.exists() else shutil.which("bash")
@@ -103,6 +118,11 @@ printf '%s\\n' "wslenv ${WSLENV:-}" >> "$RHA_TEST_LOG"
             python_env = next(line for line in invocations if line.startswith("wslenv "))
             self.assertIn("RHA_E2E_PASSWORD", python_env)
             self.assertIn("RHA_E2E_INTERNAL_TOKEN", python_env)
+            runtime_invocation = next(
+                line for line in invocations
+                if line.startswith("python ") and "rha_runtime_e2e.py" in line
+            )
+            self.assertIn("--exercise-broker-outage", runtime_invocation)
             self.assertTrue(any(" compose " in f" {line} " and " up " in f" {line} " for line in invocations))
             self.assertTrue(any(" compose " in f" {line} " and " down " in f" {line} " for line in invocations))
 

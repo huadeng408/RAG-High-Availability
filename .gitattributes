@@ -1,1 +1,2 @@
 *.sh text eol=lf
+deployments/e2e/mineru-e2e text eol=lf

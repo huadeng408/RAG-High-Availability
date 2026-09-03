@@ -257,15 +257,14 @@ func (s *uploadService) MergeChunks(ctx context.Context, fileMD5, fileName strin
 		return "", fmt.Errorf("failed to generate merged object url: %w", err)
 	}
 	task := tasks.FileProcessingTask{
-		FileMD5:         fileMD5,
-		ObjectURL:       objectURL,
-		FileName:        fileName,
-		UserID:          userID,
-		OrgTag:          record.OrgTag,
-		IsPublic:        record.IsPublic,
-		Stage:           tasks.StageParse,
-		TraceID:         observability.TraceID(ctx),
-		DocumentVersion: "upload:" + fileMD5,
+		FileMD5:   fileMD5,
+		ObjectURL: objectURL,
+		FileName:  fileName,
+		UserID:    userID,
+		OrgTag:    record.OrgTag,
+		IsPublic:  record.IsPublic,
+		Stage:     tasks.StageParse,
+		TraceID:   observability.TraceID(ctx),
 	}
 	if s.initialOutbox == nil {
 		return "", errors.New("initial pipeline outbox is not configured")

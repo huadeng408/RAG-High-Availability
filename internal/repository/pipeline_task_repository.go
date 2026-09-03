@@ -42,7 +42,6 @@ func enqueueInitialTask(db *gorm.DB, task tasks.FileProcessingTask) error {
 	if documentVersion == "" {
 		documentVersion = "upload:" + task.FileMD5
 	}
-	task.DocumentVersion = documentVersion
 	payload, err := json.Marshal(task)
 	if err != nil {
 		return err

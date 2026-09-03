@@ -688,6 +688,212 @@ class RuntimeE2ETest(unittest.TestCase):
         self.assertEqual(args.kafka_container, "rha-e2e-kafka-1")
         self.assertEqual(args.kafka_bootstrap_server, "kafka:29092")
         self.assertIsNone(args.admin_password)
+        with self.assertRaisesRegex(RuntimeError, "exercise-broker-outage"):
+            runtime.validate_runtime_args(args)
+
+    def test_cli_exposes_broker_outage_control(self) -> None:
+        runtime = load_runtime_module()
+        args = runtime.build_argument_parser().parse_args(
+            ["--out", "report.json", "--exercise-broker-outage"]
+        )
+
+        self.assertTrue(args.exercise_broker_outage)
+        self.assertEqual(args.kafka_container, "rha-e2e-kafka-1")
+
+        with self.assertRaisesRegex(RuntimeError, "exercise-reliability"):
+            runtime.validate_runtime_args(args)
+
+    def test_kafka_broker_control_confirms_stopped_and_ready_states(self) -> None:
+        runtime = load_runtime_module()
+        calls = []
+        responses = iter(
+            [
+                SimpleNamespace(returncode=0, stdout="kafka\n", stderr=""),
+                SimpleNamespace(returncode=0, stdout="kafka\n", stderr=""),
+                SimpleNamespace(returncode=0, stdout="false\n", stderr=""),
+                SimpleNamespace(returncode=0, stdout="kafka\n", stderr=""),
+                SimpleNamespace(returncode=0, stdout="kafka\n", stderr=""),
+                SimpleNamespace(returncode=0, stdout="true\n", stderr=""),
+                SimpleNamespace(returncode=0, stdout="file-parse\n", stderr=""),
+            ]
+        )
+
+        def run(command, **_kwargs):
+            calls.append(command)
+            return next(responses)
+
+        with patch.object(runtime.subprocess, "run", side_effect=run):
+            stopped = runtime.set_kafka_broker_running(
+                "kafka", False, bootstrap_server="kafka:29092", timeout_seconds=1, poll_interval=0
+            )
+            started = runtime.set_kafka_broker_running(
+                "kafka", True, bootstrap_server="kafka:29092", timeout_seconds=1, poll_interval=0
+            )
+
+        self.assertEqual(stopped, {"running": False, "ready": False})
+        self.assertEqual(started, {"running": True, "ready": True})
+        self.assertEqual(
+            calls,
+            [
+                ["docker", "inspect", "--format", "{{.Name}}", "kafka"],
+                ["docker", "stop", "kafka"],
+                ["docker", "inspect", "--format", "{{.State.Running}}", "kafka"],
+                ["docker", "inspect", "--format", "{{.Name}}", "kafka"],
+                ["docker", "start", "kafka"],
+                ["docker", "inspect", "--format", "{{.State.Running}}", "kafka"],
+                ["docker", "exec", "kafka", "kafka-topics", "--bootstrap-server", "kafka:29092", "--list"],
+            ],
+        )
+
+    def test_docker_command_timeout_has_useful_error(self) -> None:
+        runtime = load_runtime_module()
+        with patch.object(
+            runtime.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired(["docker", "inspect"], 1),
+        ):
+            with self.assertRaisesRegex(TimeoutError, "docker inspect.*timed out"):
+                runtime._docker_run(["docker", "inspect"], timeout_seconds=1)
+
+    def test_docker_command_failure_redacts_environment_password(self) -> None:
+        runtime = load_runtime_module()
+        completed = SimpleNamespace(returncode=1, stdout="", stderr="mysql failed")
+        with patch.object(runtime.subprocess, "run", return_value=completed):
+            with self.assertRaises(RuntimeError) as raised:
+                runtime._docker_run(
+                    ["docker", "exec", "-e", "MYSQL_PWD=super-secret", "mysql"],
+                    timeout_seconds=1,
+                )
+
+        self.assertNotIn("super-secret", str(raised.exception))
+        self.assertIn("MYSQL_PWD=<redacted>", str(raised.exception))
+
+    def test_kafka_outage_restores_broker_without_masking_primary_error(self) -> None:
+        runtime = load_runtime_module()
+        state = {}
+        with patch.object(
+            runtime,
+            "set_kafka_broker_running",
+            side_effect=[
+                {"running": False, "ready": False},
+                RuntimeError("recovery failed"),
+            ],
+        ) as control:
+            with self.assertRaisesRegex(ValueError, "outbox proof failed"):
+                with runtime.kafka_broker_outage(
+                    "kafka",
+                    bootstrap_server="kafka:29092",
+                    timeout_seconds=1,
+                    poll_interval=0,
+                ) as state:
+                    raise ValueError("outbox proof failed")
+
+        self.assertEqual([call.args[1] for call in control.call_args_list], [False, True])
+        self.assertEqual(state["stopped"], {"running": False, "ready": False})
+
+    def test_kafka_outage_attempts_recovery_when_stop_confirmation_fails(self) -> None:
+        runtime = load_runtime_module()
+        with patch.object(
+            runtime,
+            "set_kafka_broker_running",
+            side_effect=[
+                RuntimeError("stopped-state inspection failed"),
+                {"running": True, "ready": True},
+            ],
+        ) as control:
+            with self.assertRaisesRegex(RuntimeError, "stopped-state inspection failed"):
+                with runtime.kafka_broker_outage(
+                    "kafka",
+                    bootstrap_server="kafka:29092",
+                    timeout_seconds=1,
+                    poll_interval=0,
+                ):
+                    self.fail("the outage body must not run")
+
+        self.assertEqual([call.args[1] for call in control.call_args_list], [False, True])
+
+    def test_outbox_state_waits_for_durable_before_and_after_transitions(self) -> None:
+        runtime = load_runtime_module()
+        before_rows = iter(
+            [
+                [],
+                ["PENDING", "0", "0", "NULL", ""],
+                ["PENDING", "1", "0", "NULL", "broker unavailable"],
+            ]
+        )
+        before, before_polls = runtime.wait_for_outbox_state(
+            lambda: next(before_rows),
+            phase="before-recovery",
+            timeout_seconds=1,
+            poll_interval=0,
+        )
+        after_rows = iter(
+            [
+                ["PENDING", "2", "0", "NULL", "broker unavailable"],
+                ["PUBLISHED", "2", "1", "2026-09-03 12:00:00", ""],
+            ]
+        )
+        after, after_polls = runtime.wait_for_outbox_state(
+            lambda: next(after_rows),
+            phase="after-recovery",
+            previous_publication_attempt_count=before["publicationAttemptCount"],
+            timeout_seconds=1,
+            poll_interval=0,
+        )
+
+        self.assertEqual(before_polls, 3)
+        self.assertEqual(before["processingAttemptCount"], 0)
+        self.assertTrue(before["lastErrorPresent"])
+        self.assertEqual(after_polls, 2)
+        self.assertEqual(after["status"], "PUBLISHED")
+        self.assertTrue(after["published"])
+        self.assertFalse(after["lastErrorPresent"])
+
+    def test_elasticsearch_uniqueness_uses_persisted_document_identities(self) -> None:
+        runtime = load_runtime_module()
+
+        class ElasticsearchClient:
+            def request_json(self, method, path, payload):
+                self.last_payload = payload
+                if path == "/rha-knowledge-active/_search":
+                    hits = [
+                        {"_id": "knowledge-doc-1", "_source": {"vector_id": "vector-1"}},
+                        {"_id": "knowledge-doc-2", "_source": {"vector_id": "vector-2"}},
+                    ]
+                else:
+                    hits = [
+                        {"_id": "evidence-doc-1", "_source": {"evidence_id": "evidence-1"}},
+                    ]
+                return SimpleNamespace(body={"hits": {"hits": hits}})
+
+        client = ElasticsearchClient()
+        summary = runtime.read_elasticsearch_uniqueness(
+            client, "0123456789abcdef0123456789abcdef"
+        )
+
+        self.assertEqual(summary["knowledgeIds"], ["vector-1", "vector-2"])
+        self.assertEqual(summary["evidenceIds"], ["evidence-1"])
+        self.assertEqual(summary["uniqueKnowledgeUnits"], 2)
+        self.assertEqual(summary["uniqueEvidenceUnits"], 1)
+        self.assertEqual(client.last_payload["query"], {"term": {"file_md5": "0123456789abcdef0123456789abcdef"}})
+
+    def test_elasticsearch_uniqueness_rejects_duplicate_persisted_identity(self) -> None:
+        runtime = load_runtime_module()
+
+        class ElasticsearchClient:
+            def request_json(self, method, path, payload):
+                identity_field = "vector_id" if "knowledge" in path else "evidence_id"
+                identity = "duplicate" if "knowledge" in path else "evidence-1"
+                count = 2 if "knowledge" in path else 1
+                return SimpleNamespace(body={"hits": {"hits": [
+                    {"_id": f"doc-{index}", "_source": {identity_field: identity}}
+                    for index in range(count)
+                ]}})
+
+        with self.assertRaisesRegex(RuntimeError, "duplicate knowledge"):
+            runtime.read_elasticsearch_uniqueness(
+                ElasticsearchClient(), "0123456789abcdef0123456789abcdef"
+            )
 
     def test_admin_credentials_require_cli_or_environment_password(self) -> None:
         runtime = load_runtime_module()

@@ -90,8 +90,8 @@ func TestInitialTaskOutboxRepublishesAfterDispatcherRestartWithoutSecondMerge(t 
 	if count != 1 || len(published) != 1 {
 		t.Fatalf("published count=%d tasks=%#v", count, published)
 	}
-	if published[0].DocumentVersion != "upload:"+upload.FileMD5 || published[0].TraceID != "trace-upload" {
-		t.Fatalf("durable publication identity = %#v", published[0])
+	if published[0].DocumentVersion != "" || published[0].TraceID != "trace-upload" {
+		t.Fatalf("published parse task must defer immutable version creation: %#v", published[0])
 	}
 
 	var storedUpload model.FileUpload
@@ -133,7 +133,7 @@ func TestInitialTaskDispatcherAutomaticallyDrainsAfterBrokerRecovery(t *testing.
 
 	select {
 	case got := <-published:
-		if got.DocumentVersion != "upload:"+upload.FileMD5 || attempts != 2 {
+		if got.DocumentVersion != "" || attempts != 2 {
 			t.Fatalf("published task=%#v attempts=%d", got, attempts)
 		}
 	case <-time.After(time.Second):
