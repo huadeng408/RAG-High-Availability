@@ -1,6 +1,7 @@
 /.qoder
 /.idea
 /.vscode
+/.worktrees/
 /.gocache
 /.gomodcache
 /.venv-reranker
