@@ -46,6 +46,18 @@ class RhaModelStubTest(unittest.TestCase):
         response = model_stub.embeddings(request)
         self.assertEqual(len(response["data"]), 1)
 
+    def test_reranker_delay_and_failure_controls_are_bounded_and_readable(self) -> None:
+        model_stub = load_model_stub()
+        state = model_stub.set_failures(model_stub.FailureControl(reranker_delay_ms=25))
+        self.assertEqual(25, state["reranker_delay_ms"])
+        state = model_stub.set_failures(model_stub.FailureControl(reranker=True))
+        self.assertTrue(state["reranker"])
+        with self.assertRaises(model_stub.HTTPException) as raised:
+            model_stub.rerank(model_stub.RerankRequest(query="q", documents=["d"]))
+        self.assertEqual(503, raised.exception.status_code)
+        state = model_stub.set_failures(model_stub.FailureControl())
+        self.assertFalse(state["reranker"])
+
     def test_chat_answers_the_image_fact_when_context_contains_ocr_result(self) -> None:
         model_stub = load_model_stub()
         request = model_stub.ChatRequest(

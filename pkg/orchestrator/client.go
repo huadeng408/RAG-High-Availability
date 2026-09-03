@@ -94,6 +94,21 @@ func (c *httpClient) StreamResponse(ctx context.Context, query string, user *mod
 	defer cancel()
 	reqCtx, traceID := EnsureTraceID(reqCtx)
 	completion := StreamCompletion{TraceID: traceID, Citations: []model.Citation{}}
+	streamTraceID := traceID
+	resolveEventTrace := func(eventTrace string) (string, error) {
+		eventTrace = strings.TrimSpace(eventTrace)
+		if eventTrace != "" {
+			if streamTraceID == "" {
+				streamTraceID = eventTrace
+			} else if streamTraceID != eventTrace {
+				return "", fmt.Errorf("orchestrator stream trace ID conflict: expected=%s got=%s", streamTraceID, eventTrace)
+			}
+		}
+		if streamTraceID != "" {
+			return streamTraceID, nil
+		}
+		return traceID, nil
+	}
 
 	done := make(chan struct{})
 	defer close(done)
@@ -165,6 +180,10 @@ func (c *httpClient) StreamResponse(ctx context.Context, query string, user *mod
 		if len(line) > 0 {
 			var event streamEvent
 			if err := json.Unmarshal(bytes.TrimSpace(line), &event); err == nil {
+				eventTrace, traceErr := resolveEventTrace(event.TraceID)
+				if traceErr != nil {
+					return StreamCompletion{}, traceErr
+				}
 				switch event.Type {
 				case "chunk":
 					if event.Chunk != "" {
@@ -172,19 +191,26 @@ func (c *httpClient) StreamResponse(ctx context.Context, query string, user *mod
 							cancel()
 							return completion, nil
 						}
-						payload, _ := json.Marshal(map[string]string{"chunk": event.Chunk})
+						payload, _ := json.Marshal(map[string]string{"type": "chunk", "chunk": event.Chunk, "traceId": eventTrace})
 						if err := ws.WriteMessage(websocket.TextMessage, payload); err != nil {
 							return StreamCompletion{}, fmt.Errorf("write websocket chunk failed: %w", err)
 						}
 					}
 				case "error":
+					payload, _ := json.Marshal(map[string]string{"type": "error", "error": event.Error, "traceId": eventTrace})
+					if err := ws.WriteMessage(websocket.TextMessage, payload); err != nil {
+						return StreamCompletion{}, fmt.Errorf("write websocket error failed: %w", err)
+					}
 					if event.Error != "" {
 						return StreamCompletion{}, fmt.Errorf("orchestrator stream error: %s", event.Error)
 					}
-				case "done":
-					if event.TraceID != "" {
-						completion.TraceID = event.TraceID
+				case "trace":
+					payload, _ := json.Marshal(map[string]string{"type": "trace", "trace": event.Trace, "traceId": eventTrace})
+					if err := ws.WriteMessage(websocket.TextMessage, payload); err != nil {
+						return StreamCompletion{}, fmt.Errorf("write websocket trace failed: %w", err)
 					}
+				case "done":
+					completion.TraceID = eventTrace
 					completion.Citations = deduplicateCitations(event.Citations)
 				}
 			}

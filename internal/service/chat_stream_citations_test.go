@@ -21,7 +21,7 @@ func TestChatStreamForwardsDoneTraceAndCitationsToWebSocket(t *testing.T) {
 	log.Init("error", "json", "")
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/x-ndjson")
-		_, _ = fmt.Fprintln(writer, `{"type":"chunk","chunk":"The amount is 1200."}`)
+		_, _ = fmt.Fprintln(writer, `{"type":"chunk","chunk":"The amount is 1200.","traceId":"trace-cited-answer"}`)
 		_, _ = fmt.Fprintln(writer, `{"type":"done","done":true,"traceId":"trace-cited-answer","citations":[{"evidenceId":"e-invoice-2","documentVersion":"v-invoice","modality":"pdf","page":2,"bbox":{"x0":12,"y0":16,"x1":220,"y1":48},"excerpt":"amount 1200"}]}`)
 	}))
 	defer upstream.Close()
@@ -36,7 +36,8 @@ func TestChatStreamForwardsDoneTraceAndCitationsToWebSocket(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		if err := chat.StreamResponse(context.Background(), "where is the amount?", &model.User{ID: 5}, conn, nil); err != nil {
+		ctx := orchestratorclient.WithTraceID(context.Background(), "trace-cited-answer")
+		if err := chat.StreamResponse(ctx, "where is the amount?", &model.User{ID: 5}, conn, nil); err != nil {
 			t.Errorf("chat stream: %v", err)
 		}
 	}))
@@ -53,7 +54,14 @@ func TestChatStreamForwardsDoneTraceAndCitationsToWebSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(chunk) != `{"chunk":"The amount is 1200."}` {
+	var chunkEvent struct {
+		Chunk   string `json:"chunk"`
+		TraceID string `json:"traceId"`
+	}
+	if err := json.Unmarshal(chunk, &chunkEvent); err != nil {
+		t.Fatal(err)
+	}
+	if chunkEvent.Chunk != "The amount is 1200." || chunkEvent.TraceID != "trace-cited-answer" {
 		t.Fatalf("chunk = %s", chunk)
 	}
 

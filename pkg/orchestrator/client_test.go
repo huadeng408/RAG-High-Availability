@@ -40,7 +40,7 @@ func TestStreamResponseReturnsDoneTraceAndCitations(t *testing.T) {
 			cfg:    config.AIOrchestratorConfig{Enabled: true, BaseURL: upstream.URL},
 			client: upstream.Client(),
 		}
-		completion, err := client.StreamResponse(context.Background(), "where is the amount?", &model.User{ID: 7}, conn, nil)
+		completion, err := client.StreamResponse(WithTraceID(context.Background(), "trace-from-python"), "where is the amount?", &model.User{ID: 7}, conn, nil)
 		if err != nil {
 			t.Errorf("stream response: %v", err)
 			return

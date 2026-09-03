@@ -68,7 +68,7 @@ reranker:
   base_url: "http://model-stub:8010/rerank"
   model: "rha-fixture-reranker"
 memory:
-  enabled: false
+  enabled: true
 ai:
   orchestrator:
     enabled: true

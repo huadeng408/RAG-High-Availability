@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import base64
 import json
+import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -44,10 +46,12 @@ class ImageOCRRequest(BaseModel):
 
 class FailureControl(BaseModel):
     embeddings: bool = False
+    reranker: bool = False
+    reranker_delay_ms: int = Field(default=0, ge=0, le=30000)
 
 
 IMAGE_OCR_FIXTURE = json.loads(Path("/app/rha_image_fixture.json").read_text(encoding="utf-8"))
-FAILURES = {"embeddings": False}
+FAILURES = {"embeddings": False, "reranker": False, "reranker_delay_ms": 0}
 
 
 def _vector(text: str, dimensions: int) -> list[float]:
@@ -61,8 +65,10 @@ def health() -> dict[str, str]:
 
 
 @app.put("/control/failures")
-def set_failures(payload: FailureControl) -> dict[str, bool]:
+def set_failures(payload: FailureControl) -> dict[str, Any]:
     FAILURES["embeddings"] = payload.embeddings
+    FAILURES["reranker"] = payload.reranker
+    FAILURES["reranker_delay_ms"] = payload.reranker_delay_ms
     return dict(FAILURES)
 
 
@@ -81,6 +87,10 @@ def embeddings(payload: EmbeddingRequest) -> dict[str, Any]:
 
 @app.post("/rerank")
 def rerank(payload: RerankRequest) -> dict[str, Any]:
+    if FAILURES["reranker_delay_ms"]:
+        time.sleep(FAILURES["reranker_delay_ms"] / 1000)
+    if FAILURES["reranker"]:
+        raise HTTPException(status_code=503, detail="E2E reranker failure enabled")
     ranked = sorted(
         ({"index": idx, "relevance_score": 1.0 if payload.query.strip() and payload.query in text else 0.5} for idx, text in enumerate(payload.documents)),
         key=lambda item: item["relevance_score"],
@@ -112,8 +122,27 @@ def chat(payload: ChatRequest) -> dict[str, Any] | StreamingResponse:
             last_user_content = message.get("content", "")
             break
     query = json.dumps(last_user_content, ensure_ascii=False).lower()
+    full_context = json.dumps(payload.messages, ensure_ascii=False)
+    marker_match = re.search(r"RHA-MEMORY-[0-9a-f]+", full_context)
+    system_context = " ".join(
+        str(message.get("content", ""))
+        for message in payload.messages
+        if str(message.get("role", "")).lower() == "system"
+    ).lower()
     answer = (
-        "依据 RHA 图片证据：巡检编码为 IMG-2048。"
+        json.dumps({
+            "should_store": True,
+            "memory_type": "project",
+            "summary": f"Durable project marker {marker_match.group(0)}",
+            "content": f"Durable project marker {marker_match.group(0)}",
+            "entities": [marker_match.group(0)],
+            "importance": 0.9,
+            "profile_updates": [],
+        })
+        if marker_match and "decide whether a dialogue turn" in system_context
+        else f"The remembered marker is {marker_match.group(0)}."
+        if marker_match
+        else "依据 RHA 图片证据：巡检编码为 IMG-2048。"
         if "image inspection code" in query or "巡检编码" in query
         else "依据 RHA fixture：保留期限为七年。"
     )

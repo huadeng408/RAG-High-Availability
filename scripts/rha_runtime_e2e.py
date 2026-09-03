@@ -51,6 +51,7 @@ class RuntimeHTTPClient:
         payload: dict[str, Any] | None = None,
         *,
         token: str = "",
+        extra_headers: dict[str, str] | None = None,
     ) -> HTTPResponse:
         data = None if payload is None else json.dumps(payload).encode("utf-8")
         headers = {"Accept": "application/json", "X-Trace-ID": self._trace_id}
@@ -58,6 +59,8 @@ class RuntimeHTTPClient:
             headers["Content-Type"] = "application/json"
         if token:
             headers["Authorization"] = "Bearer " + token
+        if extra_headers:
+            headers.update(extra_headers)
         request = Request(
             self._base_url + "/" + path.lstrip("/"),
             data=data,
@@ -208,6 +211,34 @@ def set_model_embedding_failure(control_url: str, enabled: bool, *, timeout_seco
     return body
 
 
+def set_model_failures(
+    control_url: str,
+    *,
+    embeddings: bool = False,
+    reranker: bool = False,
+    reranker_delay_ms: int = 0,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    payload = json.dumps({
+        "embeddings": embeddings,
+        "reranker": reranker,
+        "reranker_delay_ms": max(0, min(int(reranker_delay_ms), 30000)),
+    }).encode("utf-8")
+    request = Request(
+        control_url.rstrip("/") + "/control/failures",
+        data=payload,
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        method="PUT",
+    )
+    with urlopen(request, timeout=timeout_seconds) as response:
+        body = json.loads(response.read() or b"{}")
+    if not isinstance(body, dict):
+        raise RuntimeError("model stub returned an invalid failure control response")
+    if body.get("embeddings") is not embeddings or body.get("reranker") is not reranker:
+        raise RuntimeError("model stub did not confirm requested failure state")
+    return body
+
+
 def consume_dlq_envelope(
     *,
     container: str,
@@ -336,10 +367,13 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--request-timeout", type=float, default=30.0)
     parser.add_argument("--websocket-timeout", type=float, default=120.0)
     parser.add_argument("--exercise-replay", action="store_true")
+    parser.add_argument("--exercise-reliability", action="store_true")
     parser.add_argument("--model-stub-control-url", default="http://127.0.0.1:8010")
     parser.add_argument("--kafka-container", default="rha-e2e-kafka-1")
     parser.add_argument("--kafka-bootstrap-server", default="kafka:29092")
     parser.add_argument("--kafka-dlq-topic", default="file-dlq")
+    parser.add_argument("--mysql-container", default="rha-e2e-mysql-1")
+    parser.add_argument("--orchestrator-container", default="rha-e2e-orchestrator-1")
     parser.add_argument("--admin-username", default=None)
     parser.add_argument("--admin-password", default=None)
     return parser
@@ -548,7 +582,7 @@ def run_runtime(
             header=[f"X-Trace-ID: {trace_id}"],
         )
         try:
-            answer, completion, _events = collect_websocket_answer(
+            answer, completion, events = collect_websocket_answer(
                 socket,
                 document_query,
                 timeout_seconds=args.websocket_timeout,
@@ -567,11 +601,142 @@ def run_runtime(
                 "traceId": completion.get("traceId"),
                 "answer": answer,
                 "citations": completion.get("citations") or [],
+                "events": events,
             },
         )
 
     retrieval, websocket = retrieve_and_chat(query)
     image_retrieval, image_websocket = retrieve_and_chat(image_query)
+
+    reliability: dict[str, Any] | None = None
+    if bool(getattr(args, "exercise_reliability", False)):
+        profile = client.request_json("GET", "/api/v1/users/me", token=token)
+        profile_data = _response_data(profile, "profile")
+        user_id = int((profile_data or {}).get("id", 0))
+        if user_id <= 0:
+            raise RuntimeError("profile did not return an authenticated user id")
+        control_url = str(getattr(args, "model_stub_control_url", "http://127.0.0.1:8010"))
+        try:
+            set_model_failures(control_url, embeddings=True, timeout_seconds=args.request_timeout)
+            degraded_retrieval, _ = retrieve_and_chat(query)
+            embedding_fallback = any(hit.get("fileMd5") == upload["fileMd5"] for hit in degraded_retrieval.get("hits") or [])
+
+            set_model_failures(control_url, reranker_delay_ms=500, timeout_seconds=args.request_timeout)
+            rerank_retrieval, _ = retrieve_and_chat(query)
+            reranker_fallback = any(hit.get("fileMd5") == upload["fileMd5"] for hit in rerank_retrieval.get("hits") or [])
+        finally:
+            set_model_failures(control_url, timeout_seconds=args.request_timeout)
+
+        foreign_marker = "FOREIGN-PRIVATE-" + run_suffix
+        foreign_id = "foreign-private-" + run_suffix
+        elasticsearch.request_json(
+            "POST",
+            "/" + quote(alias_name, safe="") + "/_doc/" + quote(foreign_id, safe="") + "?refresh=true",
+            {"file_md5": foreign_id, "chunk_id": 1, "text_content": foreign_marker, "user_id": user_id + 100000,
+             "org_tag": "foreign-private", "is_public": False, "document_version": foreign_id,
+             "modality": "text", "evidence_ids": [foreign_id]},
+        )
+        foreign_search = client.request_json(
+            "GET", "/api/v1/search/hybrid?" + urlencode({"query": foreign_marker, "topK": 10}), token=token,
+        )
+        foreign_hits = _response_data(foreign_search, "foreign private search")
+        permitted_hit = any(hit.get("fileMd5") == upload["fileMd5"] for hit in retrieval.get("hits") or [])
+        foreign_private_absent = not any(hit.get("fileMd5") == foreign_id for hit in foreign_hits or [])
+        marker = "RHA-MEMORY-" + run_suffix
+        _, memory_first = retrieve_and_chat("Remember this durable project marker: " + marker)
+
+        memory_deadline = time.monotonic() + args.pipeline_timeout
+        mysql_count = 0
+        es_memory_count = 0
+        while time.monotonic() < memory_deadline:
+            db_password = os.environ.get("RHA_E2E_PASSWORD", "")
+            completed = subprocess.run(
+                ["docker", "exec", "-e", "MYSQL_PWD=" + db_password, str(args.mysql_container),
+                 "mysql", "-N", "-uroot", "RHA", "-e", f"SELECT COUNT(*) FROM long_term_memories WHERE user_id={user_id};"],
+                check=False, capture_output=True, text=True,
+            )
+            if completed.returncode == 0 and completed.stdout.strip().isdigit():
+                mysql_count = int(completed.stdout.strip())
+            try:
+                es_count_response = elasticsearch.request_json(
+                    "POST", "/conversation_memory/_count",
+                    {"query": {"term": {"user_id": user_id}}},
+                )
+                es_memory_count = int((es_count_response.body or {}).get("count", 0))
+            except RuntimeError:
+                es_memory_count = 0
+            if mysql_count > 0 and es_memory_count > 0:
+                break
+            time.sleep(max(0.1, args.poll_interval))
+        redis_password = os.environ.get("RHA_E2E_PASSWORD", "")
+        redis_env = ["docker", "exec", "-e", "REDISCLI_AUTH=" + redis_password, "rha-e2e-redis-1", "redis-cli"]
+        scan = subprocess.run(
+            [*redis_env, "--scan", "--pattern", "conversation:*"],
+            check=False, capture_output=True, text=True,
+        )
+        conversation_keys = [line.strip() for line in scan.stdout.splitlines() if line.strip()]
+        for key in conversation_keys:
+            subprocess.run([*redis_env, "DEL", key], check=True, capture_output=True, text=True)
+        recall_query = "What durable project marker did I ask you to remember?"
+        memory_readback_response = client.request_json(
+            "POST", "/internal/orchestrator/memory-search",
+            {"user": {"id": user_id, "username": username}, "query": recall_query, "history": [],
+             "plan": {"retrievalMode": "hybrid", "skipRetrieval": False}},
+            extra_headers={"X-Internal-Token": os.environ.get("RHA_E2E_INTERNAL_TOKEN", "")},
+        )
+        memory_readback = _response_data(memory_readback_response, "memory readback")
+        _, memory_second = retrieve_and_chat(recall_query)
+        graph_probe = subprocess.run(
+            ["docker", "exec", str(args.orchestrator_container), "python", "-c",
+             "import json,sys; sys.path.insert(0,'/app/ai-orchestrator'); from app.main import graph; g=graph.get_graph(); print(json.dumps({'nodes':sorted(set(g.nodes)-{'__start__','__end__'}),'edges':[[e.source,e.target] for e in g.edges]}))"],
+            check=False, capture_output=True, text=True,
+        )
+        if graph_probe.returncode != 0 or not graph_probe.stdout.strip():
+            raise RuntimeError("failed to inspect the runtime LangGraph graph: " + graph_probe.stderr.strip())
+        graph_contract = json.loads(graph_probe.stdout.strip().splitlines()[-1])
+        graph_nodes = graph_contract.get("nodes") or []
+        expected_graph_nodes = [
+            "load_history", "classify_intent", "rewrite_query", "prepare_prompt_context",
+            "retrieve_knowledge", "retrieve_memory", "fuse_context", "rerank_context",
+            "build_messages", "generate_answer", "persist_memory",
+        ]
+        expected_graph_order = ["__start__", *expected_graph_nodes, "__end__"]
+        actual_edges = {tuple(edge) for edge in graph_contract.get("edges") or []}
+        ordered_graph_edges = [
+            [left, right]
+            for left, right in zip(expected_graph_order, expected_graph_order[1:])
+            if (left, right) in actual_edges
+        ]
+        reliability = {
+            "degradation": {
+                "embeddingFailureFallback": embedding_fallback,
+                "rerankerTimeoutFallback": reranker_fallback,
+                "embeddingFileMd5": upload["fileMd5"],
+                "rerankerFileMd5": upload["fileMd5"],
+            },
+            "permission": {
+                "permittedHit": permitted_hit,
+                "foreignPrivateAbsent": foreign_private_absent,
+                "citationsFiltered": all(citation.get("evidenceId") != foreign_id for citation in websocket.get("citations") or []),
+                "foreignDocumentId": foreign_id,
+            },
+            "memory": {
+                "marker": marker,
+                "firstTurnStored": mysql_count > 0,
+                "secondTurnRetrieved": marker in str(memory_second.get("answer", "")),
+                "durable": mysql_count > 0 and es_memory_count > 0,
+                "mysqlCount": mysql_count,
+                "elasticsearchCount": es_memory_count,
+                "shortTermHistoryCleared": bool(conversation_keys),
+                "readbackItems": (memory_readback or {}).get("items") or [],
+                "turns": [memory_first, memory_second],
+            },
+            "trace": {"events": (memory_first.get("events") or []) + (memory_second.get("events") or [])},
+            "graph": {
+                "nodes": [name for name in expected_graph_nodes if name in graph_nodes],
+                "edges": ordered_graph_edges,
+            },
+        }
 
     recovery: dict[str, Any] | None = None
     if bool(getattr(args, "exercise_replay", False)):
@@ -698,7 +863,7 @@ def run_runtime(
 
     report = {
         "reportKind": "rha-runtime-e2e",
-        "schemaVersion": 3 if recovery is not None else 2,
+        "schemaVersion": 4 if reliability is not None else (3 if recovery is not None else 2),
         "traceId": trace_id,
         "auth": {
             "registerStatusCode": register.status_code,
@@ -726,6 +891,8 @@ def run_runtime(
     }
     if recovery is not None:
         report["recovery"] = recovery
+    if reliability is not None:
+        report["reliability"] = reliability
     output_path = Path(args.out)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

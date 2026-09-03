@@ -11,6 +11,11 @@ from pathlib import Path
 
 REQUIRED_STAGES = {"parse", "chunk", "embed", "index"}
 IMAGE_MIME_TYPES = {"image/jpeg", "image/png"}
+GRAPH_NODES = [
+    "load_history", "classify_intent", "rewrite_query", "prepare_prompt_context",
+    "retrieve_knowledge", "retrieve_memory", "fuse_context", "rerank_context",
+    "build_messages", "generate_answer", "persist_memory",
+]
 
 
 def _field(label: str, name: str) -> str:
@@ -202,6 +207,53 @@ def _verify_recovery(report: dict) -> None:
         raise ValueError("recovery Elasticsearch counts prove duplicate knowledge/evidence was created")
 
 
+def _verify_reliability(report: dict, trace_id: str) -> None:
+    reliability = report.get("reliability")
+    if not isinstance(reliability, dict):
+        raise ValueError("reliability object is required for schema v4")
+
+    degradation = reliability.get("degradation")
+    if not isinstance(degradation, dict):
+        raise ValueError("reliability.degradation is required")
+    for key in ("embeddingFailureFallback", "rerankerTimeoutFallback"):
+        if degradation.get(key) is not True:
+            raise ValueError(f"reliability.degradation.{key} must be true")
+
+    permission = reliability.get("permission")
+    if not isinstance(permission, dict):
+        raise ValueError("reliability.permission is required")
+    for key in ("permittedHit", "foreignPrivateAbsent", "citationsFiltered"):
+        if permission.get(key) is not True:
+            raise ValueError(f"reliability.permission.{key} must be true")
+
+    memory = reliability.get("memory")
+    if not isinstance(memory, dict) or not str(memory.get("marker", "")).strip():
+        raise ValueError("reliability.memory.marker is required")
+    for key in ("firstTurnStored", "secondTurnRetrieved", "durable"):
+        if memory.get(key) is not True:
+            raise ValueError(f"reliability.memory.{key} must be true")
+    if memory.get("shortTermHistoryCleared") is not True:
+        raise ValueError("reliability.memory.shortTermHistoryCleared must be true")
+
+    trace = reliability.get("trace")
+    events = trace.get("events") if isinstance(trace, dict) else None
+    if not isinstance(events, list) or not events:
+        raise ValueError("reliability.trace.events is required")
+    for index, event in enumerate(events):
+        if not isinstance(event, dict) or str(event.get("traceId", "")).strip() != trace_id:
+            raise ValueError(f"reliability.trace.events[{index}] traceId must match report traceId")
+        if event.get("type") not in {"chunk", "trace", "error", "done", "completion"}:
+            raise ValueError(f"reliability.trace.events[{index}] has invalid type")
+
+    graph = reliability.get("graph")
+    nodes = graph.get("nodes") if isinstance(graph, dict) else None
+    if nodes != GRAPH_NODES:
+        raise ValueError("reliability.graph.nodes must contain the exact 11-node graph")
+    ordered = ["__start__", *GRAPH_NODES, "__end__"]
+    if graph.get("edges") != [[left, right] for left, right in zip(ordered, ordered[1:])]:
+        raise ValueError("reliability.graph.edges must contain the exact linear graph")
+
+
 def verify(report_path: Path) -> dict:
     report = json.loads(report_path.read_text(encoding="utf-8"))
     if report.get("reportKind") != "rha-runtime-e2e":
@@ -234,8 +286,8 @@ def verify(report_path: Path) -> dict:
         raise ValueError("pipeline.aliasReadback must contain a successful Elasticsearch alias readback")
 
     schema_version = report.get("schemaVersion")
-    if schema_version not in (2, 3):
-        raise ValueError("schemaVersion must be 2 or 3 for the image runtime contract")
+    if schema_version not in (2, 3, 4):
+        raise ValueError("schemaVersion must be 2, 3, or 4 for the image runtime contract")
     image_path = report.get("image")
     if not isinstance(image_path, dict):
         raise ValueError("image runtime path is required")
@@ -253,8 +305,10 @@ def verify(report_path: Path) -> dict:
     _verify_image_citation(retrieval_image_citation, field_name="image.retrieval.citations[0]")
     if image_citation != retrieval_image_citation:
         raise ValueError("image.websocket citation must equal its retrieval citation")
-    if schema_version == 3:
+    if schema_version in (3, 4):
         _verify_recovery(report)
+    if schema_version == 4:
+        _verify_reliability(report, trace_id)
     return report
 
 

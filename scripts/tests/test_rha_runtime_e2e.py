@@ -531,6 +531,11 @@ class RuntimeE2ETest(unittest.TestCase):
         args = runtime.build_argument_parser().parse_args(["--out", "report.json", "--exercise-replay"])
         self.assertTrue(args.exercise_replay)
         self.assertEqual(args.model_stub_control_url, "http://127.0.0.1:8010")
+
+    def test_cli_exposes_reliability_control(self) -> None:
+        runtime = load_runtime_module()
+        args = runtime.build_argument_parser().parse_args(["--out", "report.json", "--exercise-reliability"])
+        self.assertTrue(args.exercise_reliability)
         self.assertEqual(args.kafka_container, "rha-e2e-kafka-1")
         self.assertEqual(args.kafka_bootstrap_server, "kafka:29092")
         self.assertIsNone(args.admin_password)

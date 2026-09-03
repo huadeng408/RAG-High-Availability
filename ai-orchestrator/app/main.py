@@ -110,11 +110,17 @@ async def chat_stream(payload: ChatStreamRequest, request: Request, _: None = De
     async def event_stream():
         run_task: asyncio.Task | None = None
         try:
-            queue: asyncio.Queue[str] = asyncio.Queue()
+            queue: asyncio.Queue[dict] = asyncio.Queue()
 
-            def on_chunk(text: str) -> None:
-                if text:
-                    queue.put_nowait(text)
+            def on_chunk(event: object) -> None:
+                if isinstance(event, str):
+                    if event:
+                        queue.put_nowait(StreamEvent(type="chunk", chunk=event, traceId=trace_id).model_dump(mode="json"))
+                    return
+                if isinstance(event, dict):
+                    payload = dict(event)
+                    payload["traceId"] = trace_id
+                    queue.put_nowait(payload)
 
             initial_state = {
                 "query": payload.query,
@@ -133,7 +139,8 @@ async def chat_stream(payload: ChatStreamRequest, request: Request, _: None = De
                     chunk = await asyncio.wait_for(queue.get(), timeout=0.25)
                 except asyncio.TimeoutError:
                     continue
-                yield json.dumps(StreamEvent(type="chunk", chunk=chunk).model_dump(mode="json"), ensure_ascii=False) + "\n"
+                chunk["traceId"] = trace_id
+                yield json.dumps(chunk, ensure_ascii=False) + "\n"
             final_state = await run_task if run_task is not None else {}
         except asyncio.CancelledError:
             if run_task is not None:
@@ -142,7 +149,7 @@ async def chat_stream(payload: ChatStreamRequest, request: Request, _: None = De
         except Exception as exc:
             if run_task is not None:
                 run_task.cancel()
-            error_event = StreamEvent(type="error", error=str(exc))
+            error_event = StreamEvent(type="error", error=str(exc), traceId=trace_id)
             yield json.dumps(error_event.model_dump(mode="json"), ensure_ascii=False) + "\n"
             return
 

@@ -35,7 +35,7 @@ from .retrievers import (
     document_to_context_snippet,
     rrf_fuse_documents,
 )
-from .trace import elapsed_ms, log_request
+from .trace import current_trace_id, elapsed_ms, log_request
 
 PLANNER_PROMPT = """你是企业知识库问答系统的查询规划器。
 请基于当前问题和最近历史，输出一个 JSON 对象，字段包括：
@@ -101,9 +101,10 @@ def build_graph(settings: Settings, backend: GoBackendClient):
     def emit_trace(step: str, **metadata: Any) -> None:
         log_request("graph_step", step=step, **metadata)
         if settings.debug_traces:
+            event = StreamEvent(type="trace", trace=step, traceId=current_trace_id(), metadata=metadata).model_dump(mode="json")
             writer = get_optional_stream_writer()
             if writer is not None:
-                writer(StreamEvent(type="trace", trace=step, metadata=metadata).model_dump(mode="json"))
+                writer(event)
 
     async def load_history(state: RAGState) -> RAGState:
         start = time.perf_counter()
@@ -287,22 +288,32 @@ def build_graph(settings: Settings, backend: GoBackendClient):
                 "citations": [],
             }
 
-        response = await backend.rerank_context(
-            RerankContextRequestPayload(
-                query=state["query"],
-                topK=max(1, int(state.get("context_top_k", settings.context_top_k))),
-                items=[document_to_context_snippet(doc) for doc in fused_docs],
+        rerank_skipped = False
+        rerank_timed_out = False
+        try:
+            response = await backend.rerank_context(
+                RerankContextRequestPayload(
+                    query=state["query"],
+                    topK=max(1, int(state.get("context_top_k", settings.context_top_k))),
+                    items=[document_to_context_snippet(doc) for doc in fused_docs],
+                )
             )
-        )
-        reranked_docs = [context_snippet_to_document(item) for item in response.items]
+            reranked_docs = [context_snippet_to_document(item) for item in response.items]
+        except Exception as exc:
+            rerank_skipped = True
+            rerank_timed_out = "timeout" in str(exc).lower() or "deadline" in str(exc).lower()
+            reranked_docs = fused_docs
+            log_request("rerank_degraded", error=str(exc), timed_out=rerank_timed_out)
         context_text = _build_context_text(reranked_docs)
-        emit_trace("rerank_context", latency_ms=elapsed_ms(start), docs=len(reranked_docs))
+        emit_trace("rerank_context", latency_ms=elapsed_ms(start), docs=len(reranked_docs), rerank_skipped=rerank_skipped, rerank_timed_out=rerank_timed_out)
         citations = _build_citations(reranked_docs)
         return {
             "reranked_docs": reranked_docs,
-            "context_items": [item.model_dump(mode="json") for item in response.items],
+            "context_items": [document_to_context_snippet(item).model_dump(mode="json") for item in reranked_docs],
             "context_text": context_text,
             "citations": citations or list(state.get("citations", [])),
+            "rerank_skipped": rerank_skipped,
+            "rerank_timed_out": rerank_timed_out,
         }
 
     async def build_messages(state: RAGState) -> RAGState:
@@ -349,10 +360,10 @@ def build_graph(settings: Settings, backend: GoBackendClient):
                 continue
             parts.append(text)
             if writer is not None:
-                writer(StreamEvent(type="chunk", chunk=text).model_dump(mode="json"))
+                writer(StreamEvent(type="chunk", chunk=text, traceId=current_trace_id()).model_dump(mode="json"))
             if callable(stream_callback):
                 try:
-                    stream_callback(text)
+                    stream_callback(StreamEvent(type="chunk", chunk=text, traceId=current_trace_id()).model_dump(mode="json"))
                 except Exception:
                     pass
         answer = "".join(parts).strip()

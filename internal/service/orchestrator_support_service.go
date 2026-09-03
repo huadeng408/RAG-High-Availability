@@ -399,6 +399,10 @@ func convertContextSnippets(items []ContextSnippet) []model.OrchestratorContextS
 
 	out := make([]model.OrchestratorContextSnippet, 0, len(items))
 	for _, item := range items {
+		citations := item.Citations
+		if citations == nil {
+			citations = []model.Citation{}
+		}
 		out = append(out, model.OrchestratorContextSnippet{
 			ID:         item.ID,
 			SourceType: item.SourceType,
@@ -406,7 +410,7 @@ func convertContextSnippets(items []ContextSnippet) []model.OrchestratorContextS
 			Text:       item.Text,
 			Score:      item.Score,
 			Timestamp:  item.Timestamp,
-			Citations:  item.Citations,
+			Citations:  citations,
 		})
 	}
 	return out

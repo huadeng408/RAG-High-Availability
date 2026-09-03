@@ -161,7 +161,42 @@ def recovery_report() -> dict:
     return report
 
 
+def reliability_report() -> dict:
+    report = recovery_report()
+    report["schemaVersion"] = 4
+    report["reliability"] = {
+        "degradation": {"embeddingFailureFallback": True, "rerankerTimeoutFallback": True},
+        "permission": {"permittedHit": True, "foreignPrivateAbsent": True, "citationsFiltered": True},
+        "memory": {"marker": "RHA-MEMORY-1", "firstTurnStored": True, "secondTurnRetrieved": True, "durable": True, "shortTermHistoryCleared": True},
+        "trace": {"events": [{"type": "chunk", "traceId": "runtime-trace"}, {"type": "completion", "traceId": "runtime-trace"}]},
+        "graph": {
+            "nodes": VERIFY_MODULE.GRAPH_NODES,
+            "edges": [[left, right] for left, right in zip(
+                ["__start__", *VERIFY_MODULE.GRAPH_NODES, "__end__"],
+                ["__start__", *VERIFY_MODULE.GRAPH_NODES, "__end__"][1:],
+            )],
+        },
+    }
+    return report
+
+
 class VerifyRhaE2ETest(unittest.TestCase):
+    def test_accepts_schema_v4_reliability_evidence(self) -> None:
+        report = reliability_report()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            VERIFY_MODULE.verify(path)
+
+    def test_rejects_schema_v4_when_each_reliability_dimension_is_missing(self) -> None:
+        for dimension in ("degradation", "permission", "memory", "trace", "graph"):
+            report = reliability_report()
+            del report["reliability"][dimension]
+            with self.subTest(dimension=dimension), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "report.json"
+                path.write_text(json.dumps(report), encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    VERIFY_MODULE.verify(path)
     def test_rejects_report_without_image_runtime_path(self) -> None:
         report = runtime_report()
         del report["image"]
@@ -439,6 +474,16 @@ class VerifyRhaE2ETest(unittest.TestCase):
 
     def test_rejects_schema_v3_report_without_recovery_object(self) -> None:
         report = recovery_report()
+        del report["recovery"]
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "recovery"):
+                VERIFY_MODULE.verify(path)
+
+    def test_rejects_schema_v4_report_without_recovery_object(self) -> None:
+        report = reliability_report()
         del report["recovery"]
 
         with tempfile.TemporaryDirectory() as directory:

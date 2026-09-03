@@ -787,9 +787,6 @@ func dedupeContextSnippets(items []ContextSnippet) []ContextSnippet {
 
 // shouldRetrieveLongTermMemory reports whether retrieve long term memory.
 func shouldRetrieveLongTermMemory(query string, plan model.AgentPlan, history []model.ChatMessage) bool {
-	if len(history) == 0 {
-		return false
-	}
 	if plan.SkipRetrieval {
 		return false
 	}
