@@ -360,6 +360,15 @@ def _parse_outbox_state(row: list[str]) -> dict[str, Any]:
     }
 
 
+def parse_mysql_tsv_row(output: str) -> list[str]:
+    row = output.rstrip("\r\n")
+    if not row:
+        return []
+    if "\r" in row or "\n" in row:
+        raise ValueError("expected exactly one MySQL outbox row")
+    return row.split("\t")
+
+
 def before_recovery_outbox_poll_interval(configured_interval: float) -> float:
     return max(0.01, min(float(configured_interval), 0.1))
 
@@ -1080,8 +1089,8 @@ def run_runtime(
                     "mysql", "-N", "-uroot", "RHA", "-e", outbox_query,
                 ],
                 timeout_seconds=args.request_timeout,
-            ).stdout.strip()
-            return output.split("\t") if output else []
+            ).stdout
+            return parse_mysql_tsv_row(output)
 
         with kafka_broker_outage(
             str(getattr(args, "kafka_container", "rha-e2e-kafka-1")),

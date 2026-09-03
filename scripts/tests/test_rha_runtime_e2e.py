@@ -849,6 +849,34 @@ class RuntimeE2ETest(unittest.TestCase):
         self.assertTrue(after["published"])
         self.assertFalse(after["lastErrorPresent"])
 
+    def test_mysql_outbox_tsv_preserves_trailing_empty_error_column(self) -> None:
+        runtime = load_runtime_module()
+        self.assertTrue(
+            hasattr(runtime, "parse_mysql_tsv_row"),
+            "MySQL outbox TSV readback must preserve empty trailing columns",
+        )
+
+        row = runtime.parse_mysql_tsv_row(
+            "PUBLISHED\t3\t1\t2026-09-03 11:00:56.920\t\r\n"
+        )
+        self.assertEqual(
+            row,
+            ["PUBLISHED", "3", "1", "2026-09-03 11:00:56.920", ""],
+        )
+        state = runtime._parse_outbox_state(row)
+        self.assertFalse(state["lastErrorPresent"])
+        self.assertEqual(runtime.parse_mysql_tsv_row("\r\n"), [])
+
+        with self.assertRaisesRegex(ValueError, "five outbox columns"):
+            runtime._parse_outbox_state(
+                runtime.parse_mysql_tsv_row("PUBLISHED\t3\t1\t2026-09-03 11:00:56.920\n")
+            )
+        with self.assertRaisesRegex(ValueError, "one MySQL outbox row"):
+            runtime.parse_mysql_tsv_row(
+                "PENDING\t2\t0\tNULL\tbroker unavailable\n"
+                "PUBLISHED\t3\t1\t2026-09-03 11:00:56.920\t\n"
+            )
+
     def test_before_recovery_outbox_polling_is_positive_and_below_retry_interval(self) -> None:
         runtime = load_runtime_module()
 
