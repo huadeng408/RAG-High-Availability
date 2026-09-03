@@ -849,6 +849,13 @@ class RuntimeE2ETest(unittest.TestCase):
         self.assertTrue(after["published"])
         self.assertFalse(after["lastErrorPresent"])
 
+    def test_before_recovery_outbox_polling_is_positive_and_below_retry_interval(self) -> None:
+        runtime = load_runtime_module()
+
+        self.assertEqual(runtime.before_recovery_outbox_poll_interval(1.0), 0.1)
+        self.assertEqual(runtime.before_recovery_outbox_poll_interval(0.05), 0.05)
+        self.assertEqual(runtime.before_recovery_outbox_poll_interval(0.0), 0.01)
+
     def test_elasticsearch_uniqueness_uses_persisted_document_identities(self) -> None:
         runtime = load_runtime_module()
 

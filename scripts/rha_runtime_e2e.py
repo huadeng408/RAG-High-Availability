@@ -360,6 +360,10 @@ def _parse_outbox_state(row: list[str]) -> dict[str, Any]:
     }
 
 
+def before_recovery_outbox_poll_interval(configured_interval: float) -> float:
+    return max(0.01, min(float(configured_interval), 0.1))
+
+
 def wait_for_outbox_state(
     fetch_row: Callable[[], list[str]],
     *,
@@ -370,6 +374,7 @@ def wait_for_outbox_state(
 ) -> tuple[dict[str, Any], int]:
     if phase not in {"before-recovery", "after-recovery"}:
         raise ValueError(f"unsupported outbox phase: {phase}")
+    poll_interval = max(0.01, poll_interval)
     deadline = time.monotonic() + timeout_seconds
     polls = 0
     last_observation: object = None
@@ -1094,7 +1099,7 @@ def run_runtime(
                 read_outbox,
                 phase="before-recovery",
                 timeout_seconds=args.pipeline_timeout,
-                poll_interval=args.poll_interval,
+                poll_interval=before_recovery_outbox_poll_interval(args.poll_interval),
             )
 
         broker_pipeline, broker_poll_count = wait_for_searchable(

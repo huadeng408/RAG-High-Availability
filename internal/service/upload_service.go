@@ -350,14 +350,15 @@ func runInitialTaskDispatcher(
 		}
 	}
 	drain()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			drain()
+			timer.Reset(interval)
 		}
 	}
 }

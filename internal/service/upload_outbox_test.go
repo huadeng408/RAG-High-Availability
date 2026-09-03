@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -60,6 +61,22 @@ func newInitialTaskOutbox(t *testing.T) (repository.PipelineTaskRepository, *gor
 		t.Fatal(err)
 	}
 	return repository.NewPipelineTaskRepository(db), db, upload
+}
+
+type signalingInitialTaskOutbox struct {
+	initialTaskOutbox
+	initialDrainComplete chan struct{}
+	once                 sync.Once
+}
+
+func (s *signalingInitialTaskOutbox) ClaimPendingInitialTasks(
+	ctx context.Context,
+	limit int,
+	lease time.Duration,
+) ([]model.PipelineTask, error) {
+	rows, err := s.initialTaskOutbox.ClaimPendingInitialTasks(ctx, limit, lease)
+	s.once.Do(func() { close(s.initialDrainComplete) })
+	return rows, err
 }
 
 func TestInitialTaskOutboxRepublishesAfterDispatcherRestartWithoutSecondMerge(t *testing.T) {
@@ -138,6 +155,63 @@ func TestInitialTaskDispatcherAutomaticallyDrainsAfterBrokerRecovery(t *testing.
 		}
 	case <-time.After(time.Second):
 		t.Fatal("dispatcher did not automatically drain after broker recovery")
+	}
+}
+
+func TestInitialTaskDispatcherWaitsFreshIntervalAfterSlowPublishFailure(t *testing.T) {
+	rhalog.Init("error", "console", "")
+	outbox, _, upload := newInitialTaskOutbox(t)
+	signalingOutbox := &signalingInitialTaskOutbox{
+		initialTaskOutbox:    outbox,
+		initialDrainComplete: make(chan struct{}),
+	}
+	const interval = 40 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondDelay := make(chan time.Duration, 1)
+	attempts := 0
+	var firstFailedAt time.Time
+	go runInitialTaskDispatcher(ctx, signalingOutbox, func(tasks.FileProcessingTask) error {
+		attempts++
+		if attempts == 1 {
+			close(firstStarted)
+			<-releaseFirst
+			firstFailedAt = time.Now()
+			return errors.New("broker unavailable")
+		}
+		secondDelay <- time.Since(firstFailedAt)
+		return nil
+	}, interval)
+
+	select {
+	case <-signalingOutbox.initialDrainComplete:
+	case <-time.After(time.Second):
+		t.Fatal("dispatcher startup drain did not complete")
+	}
+	task := tasks.FileProcessingTask{FileMD5: upload.FileMD5, FileName: upload.FileName, Stage: tasks.StageParse}
+	if err := outbox.CompleteUploadAndEnqueueInitialTask(upload.ID, task); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("initial publish attempt did not start")
+	}
+	time.Sleep(3 * interval)
+	close(releaseFirst)
+
+	select {
+	case delay := <-secondDelay:
+		if delay < interval {
+			t.Fatalf("second claim started %v after slow failure, want at least %v", delay, interval)
+		}
+		if attempts != 2 {
+			t.Fatalf("publish attempts = %d, want 2", attempts)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("dispatcher did not automatically recover after fresh retry interval")
 	}
 }
 
