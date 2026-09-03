@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+import json
+import sys
+
+if len(sys.argv) != 2:
+    raise SystemExit("usage: mineru-e2e INPUT.pdf")
+
+print(json.dumps({
+    "version": "e2e-mineru-ocr-1",
+    "ocr": {"enabled": True},
+    "pages": [
+        {"page": page, "elements": [{"type": "ocr_text", "text": f"RHA PDF evidence page {page}", "bbox": [10, 20, 500, 80]}]}
+        for page in range(1, 15)
+    ],
+}))

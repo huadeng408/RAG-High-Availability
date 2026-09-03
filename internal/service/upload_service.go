@@ -21,6 +21,7 @@ import (
 	"github.com/huadeng408/RAG-High-Availability/pkg/kafka"
 	"github.com/huadeng408/RAG-High-Availability/pkg/log"
 	"github.com/huadeng408/RAG-High-Availability/pkg/objectpath"
+	"github.com/huadeng408/RAG-High-Availability/pkg/observability"
 	"github.com/huadeng408/RAG-High-Availability/pkg/storage"
 	"github.com/huadeng408/RAG-High-Availability/pkg/tasks"
 
@@ -42,14 +43,20 @@ type UploadService interface {
 
 // uploadService implements upload operations.
 type uploadService struct {
-	uploadRepo repository.UploadRepository
-	userRepo   repository.UserRepository
-	minioCfg   config.MinIOConfig
+	uploadRepo    repository.UploadRepository
+	userRepo      repository.UserRepository
+	minioCfg      config.MinIOConfig
+	initialOutbox interface {
+		EnqueueInitialTask(tasks.FileProcessingTask) error
+	}
+	produceTask func(tasks.FileProcessingTask) error
 }
 
 // NewUploadService creates an upload service.
-func NewUploadService(uploadRepo repository.UploadRepository, userRepo repository.UserRepository, minioCfg config.MinIOConfig) UploadService {
-	return &uploadService{uploadRepo: uploadRepo, userRepo: userRepo, minioCfg: minioCfg}
+func NewUploadService(uploadRepo repository.UploadRepository, userRepo repository.UserRepository, minioCfg config.MinIOConfig, initialOutbox interface {
+	EnqueueInitialTask(tasks.FileProcessingTask) error
+}) UploadService {
+	return &uploadService{uploadRepo: uploadRepo, userRepo: userRepo, minioCfg: minioCfg, initialOutbox: initialOutbox, produceTask: kafka.ProduceFileTask}
 }
 
 // CheckFile checks file.
@@ -242,10 +249,6 @@ func (s *uploadService) MergeChunks(ctx context.Context, fileMD5, fileName strin
 		}
 	}
 
-	if err := s.uploadRepo.UpdateFileUploadStatus(record.ID, 1); err != nil {
-		return "", err
-	}
-
 	objectURL, err := storage.GetPresignedURL(s.minioCfg.BucketName, destObjectName, time.Hour)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate merged object url: %w", err)
@@ -258,9 +261,13 @@ func (s *uploadService) MergeChunks(ctx context.Context, fileMD5, fileName strin
 		OrgTag:    record.OrgTag,
 		IsPublic:  record.IsPublic,
 		Stage:     tasks.StageParse,
+		TraceID:   observability.TraceID(ctx),
 	}
-	if err := kafka.ProduceFileTask(task); err != nil {
-		log.Errorf("[MergeChunks] failed to produce kafka task: %v", err)
+	if err := s.dispatchInitialTask(task); err != nil {
+		return "", err
+	}
+	if err := s.uploadRepo.UpdateFileUploadStatus(record.ID, 1); err != nil {
+		return "", err
 	}
 
 	go func() {
@@ -271,6 +278,23 @@ func (s *uploadService) MergeChunks(ctx context.Context, fileMD5, fileName strin
 	}()
 
 	return objectURL, nil
+}
+
+func (s *uploadService) dispatchInitialTask(task tasks.FileProcessingTask) error {
+	if s.initialOutbox == nil {
+		return errors.New("initial pipeline outbox is not configured")
+	}
+	if err := s.initialOutbox.EnqueueInitialTask(task); err != nil {
+		return fmt.Errorf("persist initial pipeline task: %w", err)
+	}
+	producer := s.produceTask
+	if producer == nil {
+		producer = kafka.ProduceFileTask
+	}
+	if err := producer(task); err != nil {
+		return fmt.Errorf("publish initial pipeline task: %w", err)
+	}
+	return nil
 }
 
 // GetUploadStatus returns upload status.

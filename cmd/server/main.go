@@ -109,7 +109,7 @@ func main() {
 
 	userService := service.NewUserService(userRepository, orgTagRepo, jwtManager)
 	adminService := service.NewAdminService(orgTagRepo, userRepository, conversationRepo, pipelineTaskRepo, uploadRepo)
-	uploadService := service.NewUploadService(uploadRepo, userRepository, cfg.MinIO)
+	uploadService := service.NewUploadService(uploadRepo, userRepository, cfg.MinIO, pipelineTaskRepo)
 	documentService := service.NewDocumentService(uploadRepo, userRepository, orgTagRepo, docVectorRepo, pipelineTaskRepo, cfg.MinIO, cfg.Elasticsearch.IndexName, tikaClient)
 	searchService := service.NewSearchService(
 		embeddingClient,

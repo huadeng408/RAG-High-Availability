@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	KnowledgePhysicalIndex = "rha-knowledge-v1"
-	EvidencePhysicalIndex  = "rha-evidence-v1"
+	KnowledgePhysicalIndex = "rha-knowledge-v2"
+	EvidencePhysicalIndex  = "rha-evidence-v2"
 	KnowledgeReadAlias     = "rha-knowledge-active"
 	EvidenceReadAlias      = "rha-evidence-active"
 )
@@ -46,7 +46,7 @@ func createEvidenceIndexIfNotExists(indexName string) error {
 	if res.StatusCode != 404 {
 		return fmt.Errorf("unexpected status when checking evidence index existence: %d", res.StatusCode)
 	}
-	mapping := `{"mappings":{"properties":{"evidence_id":{"type":"keyword"},"file_md5":{"type":"keyword"},"document_version":{"type":"keyword"},"modality":{"type":"keyword"},"page_number":{"type":"integer"},"slide_number":{"type":"integer"},"sheet_name":{"type":"keyword"},"text_content":{"type":"text"},"bbox":{"type":"object"},"image":{"type":"object"},"owner_id":{"type":"keyword"},"org_tag":{"type":"keyword"},"is_public":{"type":"boolean"}}}}`
+	mapping := `{"mappings":{"properties":{"evidence_id":{"type":"keyword"},"file_md5":{"type":"keyword"},"document_version":{"type":"keyword"},"modality":{"type":"keyword"},"page_number":{"type":"integer"},"slide_number":{"type":"integer"},"sheet_name":{"type":"keyword"},"row_start":{"type":"integer"},"row_end":{"type":"integer"},"heading_path":{"type":"keyword"},"text_content":{"type":"text"},"source_asset":{"type":"keyword"},"bbox":{"type":"object"},"image":{"type":"object"},"owner_id":{"type":"keyword"},"org_tag":{"type":"keyword"},"is_public":{"type":"boolean"}}}}`
 	res, err = ESClient.Indices.Create(indexName, ESClient.Indices.Create.WithBody(strings.NewReader(mapping)))
 	if err != nil {
 		return err

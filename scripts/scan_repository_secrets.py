@@ -24,6 +24,29 @@ PROVIDER_PATTERNS = (
     ("Slack token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b")),
     ("private key", re.compile(r"-----BEGIN [A-Z0-9 ]+ PRIVATE KEY-----")),
 )
+JWT_PATTERN = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")
+ASSIGNMENT_PATTERN = re.compile(
+    r"(?im)^\s*[\"']?(?P<key>password|passwd|pwd|token|api[_-]?key|secret)[\"']?\s*[:=]\s*(?P<quote>[\"'])(?P<value>[^\"']+)(?P=quote)"
+)
+
+
+def _documented_placeholder(value: str) -> bool:
+    normalized = value.strip().lower()
+    return (
+        not normalized
+        or normalized in {"not-needed", "none", "null"}
+        or normalized.startswith(("${", "$env:", "os.getenv(", "getenv(", "<", "replace-", "your-"))
+        or normalized.endswith(("_password", "_token", "_secret", "_api_key"))
+    )
+
+
+def _credential_shaped_assignment(key: str, value: str) -> bool:
+    if _documented_placeholder(value) or value.startswith("#"):
+        return False
+    normalized_key = key.lower().replace("-", "_")
+    if normalized_key in {"password", "passwd", "pwd"}:
+        return len(value) >= 6
+    return len(value) >= 12 and any(character.isalpha() for character in value) and any(character.isdigit() for character in value)
 
 
 def tracked_paths(root: Path) -> list[Path]:
@@ -49,6 +72,15 @@ def scan(root: Path, paths: list[Path]) -> list[str]:
             if match:
                 line = content.count("\n", 0, match.start()) + 1
                 findings.append(f"{path.relative_to(root)}:{line}: {label}")
+        jwt_match = JWT_PATTERN.search(content)
+        if jwt_match:
+            line = content.count("\n", 0, jwt_match.start()) + 1
+            findings.append(f"{path.relative_to(root)}:{line}: JWT-like token")
+        for match in ASSIGNMENT_PATTERN.finditer(content):
+            if not _credential_shaped_assignment(match.group("key"), match.group("value")):
+                continue
+            line = content.count("\n", 0, match.start()) + 1
+            findings.append(f"{path.relative_to(root)}:{line}: hard-coded credential assignment")
     return findings
 
 

@@ -47,6 +47,7 @@ RUNNER_PATH="$ROOT_DIR/scripts/rha_runtime_e2e.py"
 VERIFY_PATH="$ROOT_DIR/scripts/verify_rha_e2e.py"
 REPORT_ARG="$REPORT_PATH"
 if [[ "$PYTHON_BIN" == *.exe ]] && command -v wslpath >/dev/null 2>&1; then
+  export WSLENV="${WSLENV:+$WSLENV:}RHA_E2E_PASSWORD:RHA_E2E_INTERNAL_TOKEN"
   RUNNER_PATH="$(wslpath -w "$RUNNER_PATH")"
   VERIFY_PATH="$(wslpath -w "$VERIFY_PATH")"
   REPORT_ARG="$(wslpath -w "$REPORT_ARG")"

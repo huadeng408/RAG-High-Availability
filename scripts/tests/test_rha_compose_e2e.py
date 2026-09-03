@@ -63,6 +63,7 @@ printf '%s\\n' "${@: -1}"
 """,
                 "python.exe": """#!/usr/bin/env bash
 printf '%s\\n' "python $*" >> "$RHA_TEST_LOG"
+printf '%s\\n' "wslenv ${WSLENV:-}" >> "$RHA_TEST_LOG"
 """,
                 "curl": "#!/usr/bin/env bash\nexit 0\n",
                 "envsubst": "#!/usr/bin/env bash\ncat\n",
@@ -99,6 +100,9 @@ printf '%s\\n' "python $*" >> "$RHA_TEST_LOG"
             self.assertEqual(completed.returncode, 0, completed.stderr)
             invocations = invocation_log.read_text(encoding="utf-8").splitlines()
             self.assertEqual(sum(line.startswith("python ") for line in invocations), 2)
+            python_env = next(line for line in invocations if line.startswith("wslenv "))
+            self.assertIn("RHA_E2E_PASSWORD", python_env)
+            self.assertIn("RHA_E2E_INTERNAL_TOKEN", python_env)
             self.assertTrue(any(" compose " in f" {line} " and " up " in f" {line} " for line in invocations))
             self.assertTrue(any(" compose " in f" {line} " and " down " in f" {line} " for line in invocations))
 

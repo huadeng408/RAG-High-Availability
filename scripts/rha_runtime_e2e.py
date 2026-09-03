@@ -17,6 +17,7 @@ import zipfile
 import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
@@ -290,7 +291,6 @@ def consume_dlq_envelope(
         "--bootstrap-server", bootstrap_server,
         "--topic", topic, "--from-beginning",
         "--property", "print.value=true",
-        "--max-messages", "1",
         "--timeout-ms", str(max(1000, int(timeout_seconds * 1000))),
     ]
     completed = subprocess.run(command, check=False, capture_output=True, text=True)
@@ -327,7 +327,7 @@ def collect_websocket_answer(socket: Any, query: str, *, timeout_seconds: float)
             return "".join(chunks), event, events
 
 
-def build_minimal_pptx(text: str) -> bytes:
+def build_minimal_pptx(text: str, *, resume_padding_bytes: int = 0) -> bytes:
     """Build a one-slide PPTX fixture without parser-side test shortcuts."""
     slide_text = escape(text)
     files = {
@@ -355,10 +355,40 @@ def build_minimal_pptx(text: str) -> bytes:
   <p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/><p:sp><p:nvSpPr/><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{slide_text}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>
 </p:sld>""",
     }
+    slide_template = files.pop("ppt/slides/slide1.xml")
+    for slide in range(1, 15):
+        files[f"ppt/slides/slide{slide}.xml"] = slide_template.replace(slide_text, escape(f"{text} Evidence slide {slide}."))
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name, contents in files.items():
             archive.writestr(name, contents)
+        if resume_padding_bytes:
+            archive.writestr("ppt/media/resume-padding.bin", os.urandom(resume_padding_bytes), compress_type=zipfile.ZIP_STORED)
+    return buffer.getvalue()
+
+
+def build_minimal_docx(marker: str) -> bytes:
+    heading = f'<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>{escape(marker)} Evidence</w:t></w:r></w:p>'
+    paragraphs = heading + "".join(f"<w:p><w:r><w:t>{escape(marker)} Word evidence {index}</w:t></w:r></w:p>" for index in range(1, 15))
+    document = f'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{paragraphs}</w:body></w:document>'
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("word/document.xml", document)
+    return buffer.getvalue()
+
+
+def build_minimal_xlsx(marker: str) -> bytes:
+    rows = ['<row r="1"><c t="inlineStr"><is><t>marker</t></is></c><c t="inlineStr"><is><t>value</t></is></c></row>']
+    for index in range(1, 351):
+        rows.append(f'<row r="{index + 1}"><c t="inlineStr"><is><t>{escape(marker)}</t></is></c><c><v>{index}</v></c></row>')
+    workbook = '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Evidence" sheetId="1" r:id="rId1"/></sheets></workbook>'
+    relationships = '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>'
+    worksheet = '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' + "".join(rows) + '</sheetData></worksheet>'
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("xl/workbook.xml", workbook)
+        archive.writestr("xl/_rels/workbook.xml.rels", relationships)
+        archive.writestr("xl/worksheets/sheet1.xml", worksheet)
     return buffer.getvalue()
 
 
@@ -493,6 +523,7 @@ def run_runtime(
         media_type: str,
         *,
         wait_mode: str = "searchable",
+        exercise_resume: bool = False,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         file_md5 = hashlib.md5(contents).hexdigest()
         chunks = split_chunks(contents, 5 * 1024 * 1024)
@@ -519,8 +550,23 @@ def run_runtime(
             )
             chunk_requests.append({"chunkIndex": chunk_index, "statusCode": response.status_code})
 
-        for index in range(len(chunks)):
-            upload_chunk(index)
+        resume_check: dict[str, Any] | None = None
+        if exercise_resume:
+            if len(chunks) < 2:
+                raise RuntimeError("resume exercise requires at least two chunks")
+            upload_chunk(0)
+            checked = client.request_json("POST", "/api/v1/upload/check", {"md5": file_md5}, token=token)
+            resume_check = {
+                "source": "POST /api/v1/upload/check",
+                "statusCode": checked.status_code,
+                "completed": checked.body.get("completed"),
+                "uploadedChunks": checked.body.get("uploadedChunks") or [],
+            }
+            for index in range(1, len(chunks)):
+                upload_chunk(index)
+        else:
+            for index in range(len(chunks)):
+                upload_chunk(index)
         upload_chunk(0)
         merge = client.request_json(
             "POST",
@@ -560,7 +606,11 @@ def run_runtime(
                 "fileName": file_name,
                 "chunkCount": len(chunks),
                 "chunkRequests": chunk_requests,
-                "merge": {"statusCode": merge.status_code},
+                "merge": {
+                    "statusCode": merge.status_code,
+                    "traceId": _response_header(merge, "X-Trace-ID"),
+                },
+                **({"resumeCheck": resume_check} if resume_check is not None else {}),
             },
             {
                 "source": "GET /api/v1/documents/pipeline-status",
@@ -575,8 +625,9 @@ def run_runtime(
     file_name = f"rha-runtime-{run_suffix}.pptx"
     upload, pipeline = upload_and_wait(
         file_name,
-        build_minimal_pptx(f"RHA retention period is seven years. Runtime evidence marker: {run_suffix}."),
+        build_minimal_pptx(f"RHA retention period is seven years. Runtime evidence marker: {run_suffix}.", resume_padding_bytes=5 * 1024 * 1024),
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        exercise_resume=True,
     )
     image_query = "RHA image inspection code"
     image_upload, image_pipeline = upload_and_wait(
@@ -584,6 +635,9 @@ def run_runtime(
         build_minimal_png(320, 120, marker=run_suffix),
         "image/png",
     )
+    word_upload, word_pipeline = upload_and_wait(f"rha-word-{run_suffix}.docx", build_minimal_docx(run_suffix), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    excel_upload, excel_pipeline = upload_and_wait(f"rha-excel-{run_suffix}.xlsx", build_minimal_xlsx(run_suffix), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    pdf_upload, pdf_pipeline = upload_and_wait(f"rha-pdf-{run_suffix}.pdf", b"%PDF-1.4\n% RHA runtime MinerU input " + run_suffix.encode(), "application/pdf")
 
     alias_name = "rha-knowledge-active"
     elasticsearch = RuntimeHTTPClient(
@@ -603,6 +657,77 @@ def run_runtime(
     )
     if not alias_indices:
         raise RuntimeError(f"Elasticsearch alias {alias_name} has no active index")
+    if len(alias_indices) != 1:
+        raise RuntimeError(f"Elasticsearch alias {alias_name} must have exactly one active index")
+
+    previous_index = alias_indices[0]
+    mapping_response = elasticsearch.request_json("GET", "/" + quote(previous_index, safe="") + "/_mapping")
+    previous_mapping = ((mapping_response.body.get(previous_index) or {}).get("mappings") or {})
+    properties = previous_mapping.get("properties") or {}
+    if "text_content" not in properties or "vector" not in properties:
+        raise RuntimeError("active knowledge index mapping is missing text_content/vector")
+    probe_index = f"rha-knowledge-v3-probe-{run_suffix}"
+    elasticsearch.request_json("PUT", "/" + quote(probe_index, safe=""), {"mappings": previous_mapping})
+    elasticsearch.request_json("POST", "/_aliases", {"actions": [
+        {"remove": {"index": "*", "alias": alias_name, "must_exist": False}},
+        {"add": {"index": probe_index, "alias": alias_name}},
+    ]})
+    switched = elasticsearch.request_json("GET", "/_alias/" + quote(alias_name, safe=""))
+    switched_indices = sorted(switched.body)
+    probe_id = "alias-probe-" + run_suffix
+    elasticsearch.request_json("PUT", "/" + quote(alias_name, safe="") + "/_doc/" + probe_id + "?refresh=true", {
+        "text_content": "alias migration readback " + run_suffix,
+        "vector": [1.0] + [0.0] * 7,
+    })
+    readback = elasticsearch.request_json("GET", "/" + quote(alias_name, safe="") + "/_doc/" + probe_id)
+    elasticsearch.request_json("POST", "/_aliases", {"actions": [
+        {"remove": {"index": "*", "alias": alias_name, "must_exist": False}},
+        {"add": {"index": previous_index, "alias": alias_name}},
+    ]})
+    rollback = elasticsearch.request_json("GET", "/_alias/" + quote(alias_name, safe=""))
+    alias_migration = {
+        "previousIndex": previous_index,
+        "newIndex": probe_index,
+        "mappingVerified": True,
+        "readbackVerified": bool((readback.body or {}).get("found")),
+        "switchedIndices": switched_indices,
+        "rollbackIndices": sorted(rollback.body),
+    }
+
+    modality_paths = {
+        "ppt": (upload, pipeline),
+        "word": (word_upload, word_pipeline),
+        "excel": (excel_upload, excel_pipeline),
+        "pdf": (pdf_upload, pdf_pipeline),
+        "image": (image_upload, image_pipeline),
+    }
+    evidence_documents: list[dict[str, Any]] = []
+    for modality, (_, modality_pipeline) in modality_paths.items():
+        version = str(modality_pipeline.get("documentVersion") or "")
+        result = elasticsearch.request_json("POST", "/rha-evidence-active/_search", {
+            "size": 1000,
+            "query": {"term": {"document_version": version}},
+        })
+        hits = ((result.body.get("hits") or {}).get("hits") or [])
+        if not hits:
+            raise RuntimeError(f"no Elasticsearch evidence readback for {modality} version {version}")
+        for hit in hits:
+            source = hit.get("_source") or {}
+            if source.get("modality") != modality or not source.get("source_asset"):
+                raise RuntimeError(f"invalid {modality} evidence provenance readback")
+            has_location = bool(source.get("page_number") or source.get("slide_number") or source.get("sheet_name") or source.get("heading_path") or source.get("bbox"))
+            if not has_location:
+                raise RuntimeError(f"{modality} evidence lacks page-or-equivalent location")
+            evidence_documents.append(source)
+    multimodal_evidence = {
+        "source": "POST /rha-evidence-active/_search",
+        "modalities": sorted(modality_paths),
+        "total": len(evidence_documents),
+        "counts": {modality: sum(1 for item in evidence_documents if item.get("modality") == modality) for modality in modality_paths},
+        "allVersioned": all(bool(item.get("document_version")) for item in evidence_documents),
+        "allLocated": True,
+        "allDurableAssets": all(str(item.get("source_asset", "")).startswith("merged/") for item in evidence_documents),
+    }
 
     def retrieve_and_chat(document_query: str) -> tuple[dict[str, Any], dict[str, Any]]:
         search = client.request_json(
@@ -935,6 +1060,7 @@ def run_runtime(
                 "statusCode": alias_response.status_code,
                 "indices": alias_indices,
             },
+            "aliasMigration": alias_migration,
         },
         "retrieval": retrieval,
         "websocket": websocket,
@@ -944,6 +1070,7 @@ def run_runtime(
             "retrieval": image_retrieval,
             "websocket": image_websocket,
         },
+        "multimodalEvidence": multimodal_evidence,
     }
     if recovery is not None:
         report["recovery"] = recovery
@@ -951,7 +1078,17 @@ def run_runtime(
         report["reliability"] = reliability
     output_path = Path(args.out)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    report_bytes = (json.dumps(report, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    output_path.write_bytes(report_bytes)
+    provenance_path = output_path.with_suffix(output_path.suffix + ".provenance.json")
+    provenance = {
+        "kind": "rha-runtime-runner-provenance",
+        "reportSha256": hashlib.sha256(report_bytes).hexdigest(),
+        "runnerSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "runner": "scripts/rha_runtime_e2e.py",
+        "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    provenance_path.write_text(json.dumps(provenance, sort_keys=True) + "\n", encoding="utf-8")
     return 0
 
 

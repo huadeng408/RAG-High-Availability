@@ -5,11 +5,16 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.ingestion import IngestionService
+from app.ingestion import IngestionService, _canonical_asset_path
 from app.structured_ingestion import MinerUParser, MinerUUnavailableError, ParserRegistry, parse_fixture_document
 
 
 class StructuredIngestionTests(unittest.TestCase):
+    def test_canonical_asset_path_uses_durable_merged_object_identity(self) -> None:
+        self.assertEqual(
+            "merged/0123456789abcdef0123456789abcdef/inspection.png",
+            _canonical_asset_path("0123456789abcdef0123456789abcdef", "folder/inspection.png"),
+        )
     def test_fixture_pdf_keeps_ocr_page_and_bbox_evidence(self) -> None:
         parsed = parse_fixture_document("pdf", "v-pdf")
 

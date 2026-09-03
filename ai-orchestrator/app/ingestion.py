@@ -100,6 +100,9 @@ class IngestionService:
             source_path = Path(source_file.name)
         try:
             parsed_document = await asyncio.to_thread(self._parse_source, source_path, document_version)
+            durable_asset = _canonical_asset_path(payload.task.file_md5, payload.task.file_name)
+            for evidence in parsed_document.evidenceUnits:
+                evidence.assetPath = durable_asset
         finally:
             source_path.unlink(missing_ok=True)
         log_request(
@@ -110,6 +113,7 @@ class IngestionService:
             file_type=_detect_file_type(payload.task.file_name),
         )
         return ParseResponsePayload(parsedDocument=parsed_document)
+
 
     def _parse_source(self, source_path: Path, document_version: str):
         mode = self._settings.ingestion_mode
@@ -257,6 +261,10 @@ class IngestionService:
 def _detect_mime_type(file_name: str) -> str:
     mime_type, _ = mimetypes.guess_type(file_name)
     return mime_type or "application/octet-stream"
+
+
+def _canonical_asset_path(file_md5: str, file_name: str) -> str:
+    return f"merged/{file_md5}/{Path(file_name).name}"
 
 
 def _detect_file_type(file_name: str) -> str:

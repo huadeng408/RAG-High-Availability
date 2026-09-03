@@ -56,6 +56,9 @@ func ensurePipelineTaskSchema() error {
 	}{
 		{name: "document_version", definition: "VARCHAR(96) NULL"},
 		{name: "window_id", definition: "VARCHAR(64) NULL"},
+		{name: "error_class", definition: "VARCHAR(32) NULL"},
+		{name: "last_trace_id", definition: "VARCHAR(128) NULL"},
+		{name: "task_payload", definition: "LONGTEXT NULL"},
 	}
 	for _, column := range columns {
 		if DB.Migrator().HasColumn(table, column.name) {
@@ -97,7 +100,7 @@ func ensurePipelineTaskSchema() error {
 	}
 	if DB.Dialector.Name() == "mysql" {
 		if err := DB.Exec(
-			"ALTER TABLE pipeline_task MODIFY COLUMN document_version VARCHAR(96) NOT NULL, MODIFY COLUMN window_id VARCHAR(64) NOT NULL",
+			"ALTER TABLE pipeline_task MODIFY COLUMN document_version VARCHAR(96) NOT NULL, MODIFY COLUMN window_id VARCHAR(64) NOT NULL, MODIFY COLUMN idempotency_key CHAR(64) NOT NULL",
 		).Error; err != nil {
 			return fmt.Errorf("enforce versioned pipeline identity columns: %w", err)
 		}

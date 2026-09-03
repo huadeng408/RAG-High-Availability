@@ -352,6 +352,9 @@ func processStageMessage(ctx context.Context, cfg config.KafkaConfig, r *kafka.R
 	if previous.Status == model.PipelineStatusSuccess {
 		return retryUntilDurable(ctx, consumerRetryInterval(cfg), func() error { return r.CommitMessages(ctx, m) })
 	}
+	if err := tracker.RecordAttemptMetadata(task.FileMD5, documentVersion, string(task.Stage), windowID, task.TraceID, ""); err != nil {
+		return fmt.Errorf("persist task trace metadata: %w", err)
+	}
 
 	if _, err := retryMarkProcessing(ctx, consumerRetryInterval(cfg), tracker, task.FileMD5, documentVersion, string(task.Stage), windowID); err != nil {
 		log.Errorf("标记任务处理中失败, stage=%s file=%s err=%v", stage, task.FileMD5, err)
@@ -359,6 +362,10 @@ func processStageMessage(ctx context.Context, cfg config.KafkaConfig, r *kafka.R
 	}
 
 	if err := processor.Process(ctx, task); err != nil {
+		errorClass := classifyPipelineError(err)
+		if metadataErr := tracker.RecordAttemptMetadata(task.FileMD5, documentVersion, string(task.Stage), windowID, task.TraceID, errorClass); metadataErr != nil {
+			return fmt.Errorf("persist task failure metadata: %w", metadataErr)
+		}
 		var retryCount int
 		for {
 			var markErr error
@@ -412,6 +419,21 @@ func processStageMessage(ctx context.Context, cfg config.KafkaConfig, r *kafka.R
 			func() error { return r.CommitMessages(ctx, m) },
 		)
 	})
+}
+
+func classifyPipelineError(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "timeout"), strings.Contains(message, "unavailable"), strings.Contains(message, "connection"), strings.Contains(message, "broker"):
+		return "dependency"
+	case strings.Contains(message, "required"), strings.Contains(message, "invalid"), strings.Contains(message, "mismatch"), strings.Contains(message, "empty"):
+		return "validation"
+	default:
+		return "processing"
+	}
 }
 
 func consumerRetryInterval(cfg config.KafkaConfig) time.Duration {

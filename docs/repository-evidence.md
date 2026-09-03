@@ -10,12 +10,13 @@ This file records what is verified in the repository today. It separates code co
 | Python orchestrator | `PYTHONPATH=ai-orchestrator python -m unittest discover -s ai-orchestrator/tests -v` | Parser, citation, and memory tests; not a full runtime deployment. |
 | Multimodal contract | `python scripts/verify_rha_fixture.py` | PDF, Word, PowerPoint, and Excel; 8 deterministic evidence units. |
 | LangGraph topology | `ai-orchestrator/app/graph.py` and orchestrator tests | The graph contains 11 online nodes; runtime model calls still require a configured service or stub. |
-| Historical upload benchmark | `benchmarks/results/upload-baguwen-benchmark.json` when available | 120/120 upload success and merge P95 about 2.445 seconds; this does not prove parse, indexing, searchable rate, or cited answers. |
-| Existing RHA E2E script | `scripts/run_rha_e2e.sh` and `scripts/verify_rha_e2e.py` | The current report is fixture-backed and validates the citation contract; it is not yet the real upload-to-chat runtime gate. |
-| Secret hygiene | `python scripts/scan_repository_secrets.py --tracked-only` | Rejects provider key formats and private-key material in tracked files; local sample credentials still need environment migration. |
+| Historical upload benchmark | `benchmarks/results/upload-baguwen-benchmark.json` when available | 120/120 upload success and merge P95 2444.6 ms. The separate upload-to-searchable artifact records `searchable_rate=0.0`; neither result proves current runtime quality. |
+| Runtime RHA E2E | `scripts/run_rha_e2e.sh`, `scripts/rha_runtime_e2e.py`, and `scripts/verify_rha_e2e.py` | Isolated Compose execution through the production ingestion mode with deterministic local model, OCR, and MinerU test services. The schema-v4 gate requires 57 located, versioned evidence units across PDF, Word, PowerPoint, Excel, and image; interrupted upload resume; four Kafka stages; alias switch/readback/rollback; permission filtering; cited WebSocket answers; durable memory; and one-task DLQ replay without duplicate knowledge or evidence. |
+| Runtime provenance | `scripts/verify_rha_release.py --e2e-report <report>` | Requires a runner-produced sidecar whose report and runner SHA-256 digests match. A hand-written report is rejected. |
+| Secret hygiene | `python scripts/scan_repository_secrets.py --tracked-only` | Rejects provider keys, private-key material, JWT-like values, and generic credential assignments while allowing documented environment placeholders. Tracked runtime configuration contains placeholders rather than usable credentials. |
 
-## Completion evidence still required
+## Evidence boundaries
 
-The platform goal remains open until an isolated runtime test performs authenticated chunk upload, repeated-chunk idempotency, merge, all four Kafka stages, real parser output, Elasticsearch alias readback, permission-filtered hybrid search, WebSocket streaming with a citation, and DLQ replay without duplicate evidence. Image ingestion must be included in that path or in a separately linked runtime test.
+The runtime lane is deterministic acceptance evidence, not proof of external-model quality, production traffic, or throughput. Its PDF parser, OCR endpoint, embedding model, reranker, and chat model are executable local test services; the production parser and network contracts are exercised, but the service outputs remain controlled.
 
 Performance reports must state corpus, model mode, index, concurrency, denominator, and environment. Upload, merge, pipeline completion, searchable rate, citation rate, and answer latency are separate measurements; improving one cannot hide a regression in another.

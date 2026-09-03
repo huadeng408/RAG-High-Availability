@@ -21,8 +21,11 @@ type PipelineTask struct {
 	Status          string     `gorm:"type:varchar(20);not null;index" json:"status"`
 	RetryCount      int        `gorm:"not null;default:0" json:"retryCount"`
 	LastError       string     `gorm:"type:text" json:"lastError"`
+	ErrorClass      string     `gorm:"type:varchar(32)" json:"errorClass,omitempty"`
+	LastTraceID     string     `gorm:"type:varchar(128)" json:"lastTraceId,omitempty"`
 	NextAttemptAt   *time.Time `json:"nextAttemptAt,omitempty"`
-	IdempotencyKey  string     `gorm:"type:varchar(160);not null;uniqueIndex" json:"idempotencyKey"`
+	IdempotencyKey  string     `gorm:"type:char(64);not null;uniqueIndex" json:"idempotencyKey"`
+	TaskPayload     string     `gorm:"column:task_payload;type:longtext" json:"-"`
 	DLQMessageID    string     `gorm:"column:dlq_message_id;type:char(64);index" json:"dlqMessageId,omitempty"`
 	DLQPayload      string     `gorm:"column:dlq_payload;type:longtext" json:"-"`
 	DeadLetteredAt  *time.Time `gorm:"column:dead_lettered_at" json:"deadLetteredAt,omitempty"`

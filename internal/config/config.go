@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spf13/viper"
 )
@@ -224,4 +225,22 @@ func Init(configPath string) {
 	if err := viper.Unmarshal(&Conf); err != nil {
 		panic(fmt.Errorf("无法将配置解析到结构体中: %w", err))
 	}
+	expandEnvironmentPlaceholders(&Conf)
+}
+
+func expandEnvironmentPlaceholders(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	expand := os.ExpandEnv
+	cfg.Database.MySQL.DSN = expand(cfg.Database.MySQL.DSN)
+	cfg.Database.Redis.Password = expand(cfg.Database.Redis.Password)
+	cfg.JWT.Secret = expand(cfg.JWT.Secret)
+	cfg.MinIO.AccessKeyID = expand(cfg.MinIO.AccessKeyID)
+	cfg.MinIO.SecretAccessKey = expand(cfg.MinIO.SecretAccessKey)
+	cfg.Elasticsearch.Password = expand(cfg.Elasticsearch.Password)
+	cfg.Embedding.APIKey = expand(cfg.Embedding.APIKey)
+	cfg.LLM.APIKey = expand(cfg.LLM.APIKey)
+	cfg.Reranker.APIKey = expand(cfg.Reranker.APIKey)
+	cfg.AI.Orchestrator.SharedSecret = expand(cfg.AI.Orchestrator.SharedSecret)
 }

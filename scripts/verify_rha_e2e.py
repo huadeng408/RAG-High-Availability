@@ -42,8 +42,21 @@ def _verify_document_path(
         raise ValueError(
             f"{_field(label, 'upload.chunkRequests')} must include a successful duplicate chunk request"
         )
-    if (upload.get("merge") or {}).get("statusCode") != 200:
+    merge = upload.get("merge") or {}
+    if merge.get("statusCode") != 200:
         raise ValueError(f"{_field(label, 'upload.merge.statusCode')} must be 200")
+    merge_trace_id = str(merge.get("traceId", "")).strip()
+    if not merge_trace_id:
+        raise ValueError(f"{_field(label, 'upload.merge.traceId')} is required")
+    if not label:
+        resume = upload.get("resumeCheck") or {}
+        if (
+            resume.get("source") != "POST /api/v1/upload/check"
+            or resume.get("statusCode") != 200
+            or resume.get("completed") is not False
+            or resume.get("uploadedChunks") != [0]
+        ):
+            raise ValueError("upload.resumeCheck must prove an interrupted upload resumed after chunk 0")
     file_md5 = str(upload.get("fileMd5", ""))
     if not re.fullmatch(r"[0-9a-f]{32}", file_md5):
         raise ValueError(f"{_field(label, 'upload.fileMd5')} must be a lowercase MD5 digest")
@@ -60,6 +73,10 @@ def _verify_document_path(
         raise ValueError(
             f"{_field(label, 'pipeline.stages')} must contain four successful runtime stages"
         )
+    if any(str(stages[stage].get("lastTraceId", "")).strip() != merge_trace_id for stage in REQUIRED_STAGES):
+        raise ValueError(
+            f"{_field(label, 'pipeline.stages')} must preserve the upload merge traceId"
+        )
     if retrieval.get("statusCode") != 200 or not retrieval.get("hits"):
         raise ValueError(
             f"{_field(label, 'retrieval.hits')} must contain a successful runtime search result"
@@ -70,10 +87,19 @@ def _verify_document_path(
     ]
     if not current_hits:
         raise ValueError(f"{_field(label, 'retrieval.hits')} must contain the uploaded file")
-    if retrieval.get("traceId") != trace_id or websocket.get("traceId") != trace_id:
-        raise ValueError(
-            f"{_field(label, 'traceId')} must match across retrieval and websocket observations"
-        )
+    retrieval_trace_id = str(retrieval.get("traceId", "")).strip()
+    websocket_trace_id = str(websocket.get("traceId", "")).strip()
+    if not retrieval_trace_id or not websocket_trace_id:
+        raise ValueError(f"{_field(label, 'traceId')} is required for retrieval and websocket observations")
+    websocket_events = websocket.get("events")
+    if not isinstance(websocket_events, list) or not websocket_events:
+        raise ValueError(f"{_field(label, 'websocket.events')} must contain raw stream events")
+    if any(
+        not isinstance(event, dict)
+        or str(event.get("traceId", "")).strip() != websocket_trace_id
+        for event in websocket_events
+    ):
+        raise ValueError(f"{_field(label, 'websocket.events')} must preserve its stream traceId")
     if not str(websocket.get("answer", "")).strip():
         raise ValueError(
             f"{_field(label, 'websocket.answer')} must contain streamed response text"
@@ -91,7 +117,27 @@ def _verify_document_path(
         raise ValueError(
             f"{_field(label, 'websocket.citations')} must include the current documentVersion"
         )
-    citation = current_citations[0]
+    retrieval_citations = [
+        item
+        for hit in current_hits
+        for item in hit.get("citations") or []
+    ]
+    retrieval_keys = {
+        (item.get("evidenceId"), item.get("documentVersion"))
+        for item in retrieval_citations
+    }
+    citation = next(
+        (
+            item
+            for item in current_citations
+            if (item.get("evidenceId"), item.get("documentVersion")) in retrieval_keys
+        ),
+        None,
+    )
+    if citation is None:
+        raise ValueError(
+            f"{_field(label, 'websocket citation')} must match a retrieval citation"
+        )
     has_location = (
         int(citation.get("page", 0)) > 0
         or int(citation.get("slide", 0)) > 0
@@ -102,11 +148,6 @@ def _verify_document_path(
         raise ValueError(
             f"{_field(label, 'websocket.citations')} must include evidenceId and a source location"
         )
-    retrieval_citations = [
-        item
-        for hit in current_hits
-        for item in hit.get("citations") or []
-    ]
     citation_key = (citation.get("evidenceId"), citation.get("documentVersion"))
     retrieval_citation = next(
         (
@@ -116,10 +157,7 @@ def _verify_document_path(
         ),
         None,
     )
-    if retrieval_citation is None:
-        raise ValueError(
-            f"{_field(label, 'websocket citation')} must match a retrieval citation"
-        )
+    assert retrieval_citation is not None
     return citation, retrieval_citation
 
 
@@ -198,6 +236,12 @@ def _verify_recovery(report: dict) -> None:
         for required in REQUIRED_STAGES
     ):
         raise ValueError("recovery pipeline.stages must contain four successful runtime stages")
+    recovery_merge_trace = str(((recovery_upload.get("merge") or {}).get("traceId")) or "").strip()
+    if not recovery_merge_trace or any(
+        str(stages[required].get("lastTraceId", "")).strip() != recovery_merge_trace
+        for required in REQUIRED_STAGES
+    ):
+        raise ValueError("recovery pipeline stages must preserve the upload merge traceId")
     embed = stages.get(stage) or {}
     if embed.get("status") != "SUCCESS" or int(embed.get("replayCount", 0)) < 1:
         raise ValueError("recovery replay stage must be successful with replay metadata")
@@ -207,7 +251,7 @@ def _verify_recovery(report: dict) -> None:
         raise ValueError("recovery Elasticsearch counts prove duplicate knowledge/evidence was created")
 
 
-def _verify_reliability(report: dict, trace_id: str) -> None:
+def _verify_reliability(report: dict) -> None:
     reliability = report.get("reliability")
     if not isinstance(reliability, dict):
         raise ValueError("reliability object is required for schema v4")
@@ -289,16 +333,17 @@ def _verify_reliability(report: dict, trace_id: str) -> None:
         raise ValueError("memory trace evidence must contain exactly two turns")
     flattened_events: list[dict] = []
     for turn_index, turn in enumerate(turns):
-        if not isinstance(turn, dict) or turn.get("traceId") != trace_id:
-            raise ValueError(f"memory turn {turn_index} traceId must match report traceId")
+        if not isinstance(turn, dict) or not str(turn.get("traceId", "")).strip():
+            raise ValueError(f"memory turn {turn_index} traceId is required")
+        turn_trace_id = str(turn["traceId"]).strip()
         turn_events = turn.get("events")
         if not isinstance(turn_events, list) or not turn_events:
             raise ValueError(f"memory turn {turn_index} events are required")
         has_chunk = False
         has_completion = False
         for event in turn_events:
-            if not isinstance(event, dict) or event.get("traceId") != trace_id:
-                raise ValueError(f"memory turn {turn_index} raw event traceId must match report traceId")
+            if not isinstance(event, dict) or event.get("traceId") != turn_trace_id:
+                raise ValueError(f"memory turn {turn_index} raw event traceId must match its turn traceId")
             has_chunk = has_chunk or event.get("type") == "chunk"
             has_completion = has_completion or (
                 event.get("type") == "completion" and event.get("status") == "finished"
@@ -315,9 +360,10 @@ def _verify_reliability(report: dict, trace_id: str) -> None:
         raise ValueError("reliability.trace.events is required")
     if events != flattened_events:
         raise ValueError("reliability trace events must exactly flatten the two raw memory turns")
+    turn_trace_ids = {str(turn["traceId"]).strip() for turn in turns}
     for index, event in enumerate(events):
-        if not isinstance(event, dict) or str(event.get("traceId", "")).strip() != trace_id:
-            raise ValueError(f"reliability.trace.events[{index}] traceId must match report traceId")
+        if not isinstance(event, dict) or str(event.get("traceId", "")).strip() not in turn_trace_ids:
+            raise ValueError(f"reliability.trace.events[{index}] traceId must match its source turn")
         if event.get("type") not in {"chunk", "trace", "error", "done", "completion"}:
             raise ValueError(f"reliability.trace.events[{index}] has invalid type")
 
@@ -371,6 +417,20 @@ def verify(report_path: Path) -> dict:
         or not alias_readback.get("indices")
     ):
         raise ValueError("pipeline.aliasReadback must contain a successful Elasticsearch alias readback")
+    migration = pipeline.get("aliasMigration") or {}
+    previous_index = migration.get("previousIndex")
+    new_index = migration.get("newIndex")
+    if (
+        not previous_index
+        or not new_index
+        or previous_index == new_index
+        or migration.get("mappingVerified") is not True
+        or migration.get("readbackVerified") is not True
+        or migration.get("switchedIndices") != [new_index]
+        or migration.get("rollbackIndices") != [previous_index]
+        or alias_readback.get("indices") != [previous_index]
+    ):
+        raise ValueError("pipeline.aliasMigration must prove mapping, switch readback, and rollback to the previous index")
 
     schema_version = report.get("schemaVersion")
     if schema_version not in (2, 3, 4):
@@ -392,10 +452,25 @@ def verify(report_path: Path) -> dict:
     _verify_image_citation(retrieval_image_citation, field_name="image.retrieval.citations[0]")
     if image_citation != retrieval_image_citation:
         raise ValueError("image.websocket citation must equal its retrieval citation")
+    multimodal = report.get("multimodalEvidence") or {}
+    counts = multimodal.get("counts") or {}
+    required_modalities = {"pdf", "word", "ppt", "excel", "image"}
+    if (
+        multimodal.get("source") != "POST /rha-evidence-active/_search"
+        or set(multimodal.get("modalities") or []) != required_modalities
+        or set(counts) != required_modalities
+        or any(type(counts.get(name)) is not int or counts[name] < 1 for name in required_modalities)
+        or multimodal.get("total") != sum(counts.values())
+        or multimodal.get("total", 0) < 54
+        or multimodal.get("allVersioned") is not True
+        or multimodal.get("allLocated") is not True
+        or multimodal.get("allDurableAssets") is not True
+    ):
+        raise ValueError("multimodalEvidence must prove at least 54 located, versioned units across PDF, Word, PPT, Excel, and image")
     if schema_version in (3, 4):
         _verify_recovery(report)
     if schema_version == 4:
-        _verify_reliability(report, trace_id)
+        _verify_reliability(report)
     return report
 
 

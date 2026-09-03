@@ -341,7 +341,7 @@ func (s *orchestratorSupportService) RerankContext(ctx context.Context, req *mod
 	return &model.OrchestratorRerankResponse{Items: convertContextSnippets(deduped)}, nil
 }
 
-// PersistTurn stores the final answer in conversation history and writes memory asynchronously.
+// PersistTurn returns only after both conversation history and durable memory are stored.
 func (s *orchestratorSupportService) PersistTurn(ctx context.Context, req *model.OrchestratorPersistRequest) error {
 	if req == nil {
 		return fmt.Errorf("persist request is required")
@@ -351,6 +351,9 @@ func (s *orchestratorSupportService) PersistTurn(ctx context.Context, req *model
 	}
 	if req.Answer == "" {
 		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	user := req.User.ToUser()
@@ -374,11 +377,9 @@ func (s *orchestratorSupportService) PersistTurn(ctx context.Context, req *model
 	}
 
 	if s.memoryService != nil {
-		go func(userCopy *model.User, conversationID string, history []model.ChatMessage, question, answer string) {
-			if err := s.memoryService.PersistInteraction(context.Background(), userCopy, conversationID, history, question, answer); err != nil {
-				log.Warnf("[OrchestratorSupportService] persist memory degraded for user=%d: %v", userCopy.ID, err)
-			}
-		}(user, conversationID, updatedHistory, req.Query, req.Answer)
+		if err := s.memoryService.PersistInteraction(ctx, user, conversationID, updatedHistory, req.Query, req.Answer); err != nil {
+			return fmt.Errorf("persist completed turn memory: %w", err)
+		}
 	}
 
 	return nil

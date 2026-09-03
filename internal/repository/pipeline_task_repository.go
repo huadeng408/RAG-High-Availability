@@ -3,10 +3,13 @@ package repository
 
 import (
 	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/huadeng408/RAG-High-Availability/internal/model"
+	"github.com/huadeng408/RAG-High-Availability/pkg/tasks"
 	"strings"
 	"time"
 
@@ -14,8 +17,29 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// EnqueueInitialTask durably records the complete initial payload before Kafka publication.
+func (r *pipelineTaskRepository) EnqueueInitialTask(task tasks.FileProcessingTask) error {
+	documentVersion := strings.TrimSpace(task.DocumentVersion)
+	if documentVersion == "" {
+		documentVersion = "upload:" + task.FileMD5
+	}
+	payload, err := json.Marshal(task)
+	if err != nil {
+		return err
+	}
+	row, err := r.GetOrStart(task.FileMD5, documentVersion, string(task.Stage), "root")
+	if err != nil {
+		return err
+	}
+	return r.db.Model(row).Updates(map[string]any{
+		"task_payload":  string(payload),
+		"last_trace_id": strings.TrimSpace(task.TraceID),
+	}).Error
+}
+
 // PipelineTaskRepository defines persistence operations for pipeline task data.
 type PipelineTaskRepository interface {
+	EnqueueInitialTask(task tasks.FileProcessingTask) error
 	GetOrStart(fileMD5, documentVersion, stage, windowID string) (*model.PipelineTask, error)
 	MarkProcessingByKey(fileMD5, documentVersion, stage, windowID string) (*model.PipelineTask, error)
 	MarkSuccessByKey(fileMD5, documentVersion, stage, windowID string) error
@@ -24,6 +48,7 @@ type PipelineTaskRepository interface {
 	MarkDeadLetterByKey(fileMD5, documentVersion, stage, windowID, lastError, payload, messageID string) error
 	GetDeadLetterByKey(fileMD5, documentVersion, stage, windowID string) (payload, messageID string, err error)
 	ResetForReplayByKey(fileMD5, documentVersion, stage, windowID string) error
+	RecordAttemptMetadata(fileMD5, documentVersion, stage, windowID, traceID, errorClass string) error
 	GetByKey(fileMD5, stage string, chunkID int) (*model.PipelineTask, error)
 	MarkProcessing(fileMD5, stage string, chunkID int) (*model.PipelineTask, error)
 	MarkSuccess(fileMD5, stage string, chunkID int) error
@@ -45,7 +70,12 @@ func NewPipelineTaskRepository(db *gorm.DB) PipelineTaskRepository {
 
 // buildPipelineKey builds pipeline key.
 func buildPipelineKey(fileMD5, stage string, chunkID int) string {
-	return fmt.Sprintf("%s:%s:%d", fileMD5, stage, chunkID)
+	return buildVersionedPipelineKey(fileMD5, stage, fmt.Sprintf("%d", chunkID))
+}
+
+func buildVersionedPipelineKey(documentVersion, stage, windowID string) string {
+	digest := sha256.Sum256([]byte(documentVersion + "\x00" + stage + "\x00" + windowID))
+	return hex.EncodeToString(digest[:])
 }
 
 // GetOrStart atomically creates or loads one versioned pipeline task.
@@ -58,7 +88,7 @@ func (r *pipelineTaskRepository) GetOrStart(fileMD5, documentVersion, stage, win
 		WindowID:        windowID,
 		Status:          model.PipelineStatusPending,
 		ChunkID:         -1,
-		IdempotencyKey:  fmt.Sprintf("%s:%s:%s", documentVersion, stage, windowID),
+		IdempotencyKey:  buildVersionedPipelineKey(documentVersion, stage, windowID),
 	}
 	result := r.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "document_version"}, {Name: "stage"}, {Name: "window_id"}},
@@ -74,6 +104,18 @@ func (r *pipelineTaskRepository) GetOrStart(fileMD5, documentVersion, stage, win
 		return nil, err
 	}
 	return task, nil
+}
+
+func (r *pipelineTaskRepository) RecordAttemptMetadata(fileMD5, documentVersion, stage, windowID, traceID, errorClass string) error {
+	task, err := r.GetOrStart(fileMD5, documentVersion, stage, windowID)
+	if err != nil {
+		return err
+	}
+	updates := map[string]any{"last_trace_id": strings.TrimSpace(traceID)}
+	if strings.TrimSpace(errorClass) != "" {
+		updates["error_class"] = strings.TrimSpace(errorClass)
+	}
+	return r.db.Model(task).Updates(updates).Error
 }
 
 // pipelineTaskFileMD5 fills the legacy file identity column for versioned tasks.

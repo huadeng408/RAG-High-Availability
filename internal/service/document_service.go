@@ -31,6 +31,8 @@ type PipelineStageStatus struct {
 	AttemptCount   int        `json:"attemptCount"`
 	RetryCount     int        `json:"retryCount"`
 	LastError      string     `json:"lastError,omitempty"`
+	ErrorClass     string     `json:"errorClass,omitempty"`
+	LastTraceID    string     `json:"lastTraceId,omitempty"`
 	NextAttemptAt  *time.Time `json:"nextAttemptAt,omitempty"`
 	DLQMessageID   string     `json:"dlqMessageId,omitempty"`
 	DeadLetteredAt *time.Time `json:"deadLetteredAt,omitempty"`
@@ -224,7 +226,9 @@ func aggregatePipelineStage(stage string, tasks []model.PipelineTask) PipelineSt
 	if len(tasks) == 0 {
 		return result
 	}
-	result.AttemptCount = len(tasks)
+	for _, task := range tasks {
+		result.AttemptCount += task.RetryCount + 1
+	}
 	latest := tasks[0]
 	latestDeadLetter := tasks[0]
 	for _, task := range tasks {
@@ -240,6 +244,8 @@ func aggregatePipelineStage(stage string, tasks []model.PipelineTask) PipelineSt
 		}
 	}
 	result.LastError = latest.LastError
+	result.ErrorClass = latest.ErrorClass
+	result.LastTraceID = latest.LastTraceID
 	result.NextAttemptAt = latest.NextAttemptAt
 	result.UpdatedAt = latest.UpdatedAt
 	if latestDeadLetter.DeadLetteredAt != nil {

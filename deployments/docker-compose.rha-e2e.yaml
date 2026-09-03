@@ -104,6 +104,7 @@ services:
       RHA_GO_BASE_URL: http://go:8080
       RHA_INTERNAL_TOKEN: "${RHA_E2E_INTERNAL_TOKEN:?RHA_E2E_INTERNAL_TOKEN is required}"
       RHA_INGESTION_MODE: production
+      RHA_MINERU_COMMAND: /app/mineru-e2e
       RHA_LLM_BASE_URL: http://model-stub:8010/v1
       RHA_LLM_API_KEY: not-needed
       RHA_LLM_MODEL: rha-fixture-chat

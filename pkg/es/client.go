@@ -33,7 +33,11 @@ type EvidenceDocument struct {
 	PageNumber      int                  `json:"page_number,omitempty"`
 	SlideNumber     int                  `json:"slide_number,omitempty"`
 	SheetName       string               `json:"sheet_name,omitempty"`
+	RowStart        int                  `json:"row_start,omitempty"`
+	RowEnd          int                  `json:"row_end,omitempty"`
+	HeadingPath     []string             `json:"heading_path,omitempty"`
 	TextContent     string               `json:"text_content"`
+	SourceAsset     string               `json:"source_asset"`
 	BBox            *model.BoundingBox   `json:"bbox,omitempty"`
 	Image           *model.ImageMetadata `json:"image,omitempty"`
 	OwnerID         string               `json:"owner_id"`
@@ -51,7 +55,8 @@ func BuildEvidenceDocuments(fileMD5 string, ownerID uint, orgTag string, isPubli
 		docs = append(docs, EvidenceDocument{
 			EvidenceID: unit.ID, FileMD5: fileMD5, DocumentVersion: unit.DocumentVersion,
 			Modality: unit.Modality, PageNumber: unit.Page, SlideNumber: unit.Slide,
-			SheetName: unit.Sheet, TextContent: unit.Text, BBox: unit.BBox, Image: unit.Image,
+			SheetName: unit.Sheet, RowStart: unit.RowStart, RowEnd: unit.RowEnd, HeadingPath: unit.HeadingPath,
+			TextContent: unit.Text, SourceAsset: unit.AssetPath, BBox: unit.BBox, Image: unit.Image,
 			OwnerID: strconv.FormatUint(uint64(ownerID), 10), OrgTag: orgTag, IsPublic: isPublic,
 		})
 	}

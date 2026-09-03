@@ -1,12 +1,24 @@
 package repository
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/glebarez/sqlite"
 	"github.com/huadeng408/RAG-High-Availability/internal/model"
 	"gorm.io/gorm"
 )
+
+func TestVersionedPipelineKeyHasFixedWidthForMaximumLegalIdentity(t *testing.T) {
+	key := buildVersionedPipelineKey(strings.Repeat("v", 96), strings.Repeat("s", 20), strings.Repeat("w", 64))
+	if len(key) != 64 {
+		t.Fatalf("idempotency key length = %d, want SHA-256 width 64", len(key))
+	}
+	other := buildVersionedPipelineKey(strings.Repeat("v", 95)+"x", strings.Repeat("s", 20), strings.Repeat("w", 64))
+	if key == other {
+		t.Fatal("different maximum-width identities collided")
+	}
+}
 
 func newSQLitePipelineTaskRepo(t *testing.T) PipelineTaskRepository {
 	t.Helper()
@@ -82,6 +94,20 @@ func TestMarkRetryByKeyPersistsNextAttemptAndFinalError(t *testing.T) {
 	}
 	if task.LastError != "mineru unavailable" || task.NextAttemptAt == nil {
 		t.Fatalf("retry state not persisted: %#v", task)
+	}
+}
+
+func TestAttemptMetadataPersistsLatestTraceAndTypedFailure(t *testing.T) {
+	repo := newSQLitePipelineTaskRepo(t)
+	if err := repo.RecordAttemptMetadata("file-1", "version-1", "embed", "window-1", "trace-new", "dependency"); err != nil {
+		t.Fatal(err)
+	}
+	task, err := repo.GetOrStart("file-1", "version-1", "embed", "window-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.LastTraceID != "trace-new" || task.ErrorClass != "dependency" {
+		t.Fatalf("attempt metadata = trace %q class %q", task.LastTraceID, task.ErrorClass)
 	}
 }
 

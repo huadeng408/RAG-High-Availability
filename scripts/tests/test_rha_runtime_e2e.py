@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -33,6 +34,18 @@ def load_runtime_module():
 
 
 class RuntimeE2ETest(unittest.TestCase):
+    def test_dlq_consumer_scans_past_stale_retained_record(self) -> None:
+        runtime = load_runtime_module()
+        stale = json.dumps({"dlq_id": "old"})
+        current = json.dumps({"dlq_id": "wanted", "stage": "embed"})
+        completed = subprocess.CompletedProcess([], 1, stdout=stale + "\n" + current + "\n", stderr="timeout")
+        with patch.object(runtime.subprocess, "run", return_value=completed) as run:
+            envelope = runtime.consume_dlq_envelope(
+                container="kafka", bootstrap_server="kafka:29092", topic="file-dlq",
+                message_id="wanted", timeout_seconds=1,
+            )
+        self.assertEqual(envelope["dlq_id"], "wanted")
+        self.assertNotIn("--max-messages", run.call_args.args[0])
     def test_model_failure_control_requires_reranker_delay_readback(self) -> None:
         runtime = load_runtime_module()
 
@@ -71,6 +84,7 @@ class RuntimeE2ETest(unittest.TestCase):
             "chunkFields": [],
             "chunkMediaTypes": [],
             "merges": [],
+            "mergeTraces": {},
             "searchQueries": [],
             "websocketQueries": [],
             "websocketClosed": 0,
@@ -117,6 +131,9 @@ class RuntimeE2ETest(unittest.TestCase):
                     observed["login"] = json.loads(body)
                     self._write_json({"code": 200, "data": {"token": "secret-jwt"}})
                     return
+                if self.path.endswith("/upload/check"):
+                    self._write_json({"completed": False, "uploadedChunks": [0]})
+                    return
                 if self.path.endswith("/upload/chunk"):
                     message = BytesParser(policy=policy.default).parsebytes(
                         (
@@ -139,10 +156,46 @@ class RuntimeE2ETest(unittest.TestCase):
                     self._write_json({"code": 200, "data": {"uploaded": [0], "totalChunks": 1}})
                     return
                 if self.path.endswith("/upload/merge"):
-                    observed["merges"].append(json.loads(body))
-                    self._write_json({"code": 200, "data": {"object_url": "uploads/runtime"}})
+                    merge_payload = json.loads(body)
+                    observed["merges"].append(merge_payload)
+                    merge_trace = merge_payload["fileMd5"][:16]
+                    observed["mergeTraces"][merge_payload["fileMd5"]] = merge_trace
+                    self._write_json(
+                        {"code": 200, "data": {"object_url": "uploads/runtime"}},
+                        trace=merge_trace,
+                    )
+                    return
+                if self.path == "/_aliases":
+                    actions = json.loads(body)["actions"]
+                    observed["activeAlias"] = actions[-1]["add"]["index"]
+                    self._write_json({"acknowledged": True})
+                    return
+                if self.path == "/rha-evidence-active/_search":
+                    version = json.loads(body)["query"]["term"]["document_version"]
+                    modality = version.split("-", 1)[0]
+                    if modality == "content":
+                        modality = "ppt"
+                    count = 1 if modality == "image" else 14
+                    sources = []
+                    for index in range(count):
+                        source = {"modality": modality, "document_version": version, "source_asset": f"merged/md5/file.{modality}"}
+                        if modality == "word": source["heading_path"] = ["Evidence"]
+                        elif modality == "excel": source["sheet_name"] = "Evidence"
+                        elif modality == "ppt": source["slide_number"] = index + 1
+                        elif modality == "pdf": source["page_number"] = index + 1
+                        else: source["bbox"] = {"x0": 1, "y0": 1, "x1": 2, "y1": 2}
+                        sources.append({"_source": source})
+                    self._write_json({"hits": {"hits": sources}})
                     return
                 self.send_error(404)
+
+            def do_PUT(self) -> None:
+                observed["paths"].append(self.path)
+                length = int(self.headers.get("Content-Length", "0"))
+                body = self.rfile.read(length)
+                if "/_doc/alias-probe-" in self.path:
+                    observed["aliasProbe"] = json.loads(body)
+                self._write_json({"acknowledged": True})
 
             def do_GET(self) -> None:
                 observed["paths"].append(self.path)
@@ -156,16 +209,22 @@ class RuntimeE2ETest(unittest.TestCase):
                         None,
                     )
                     self.assert_request(matching_chunk is not None)
-                    is_image = matching_chunk["fileName"].endswith(".png")
+                    suffix = Path(matching_chunk["fileName"]).suffix.lower()
+                    modality = {".png": "image", ".docx": "word", ".xlsx": "excel", ".pdf": "pdf"}.get(suffix, "content")
                     self._write_json(
                         {
                             "code": 200,
                             "data": {
                                 "fileMd5": file_md5,
-                                "documentVersion": "image-version" if is_image else "content-version",
+                                "documentVersion": modality + "-version",
                                 "status": "SEARCHABLE",
                                 "stages": [
-                                    {"stage": stage, "status": "SUCCESS", "attemptCount": 1}
+                                    {
+                                        "stage": stage,
+                                        "status": "SUCCESS",
+                                        "attemptCount": 1,
+                                        "lastTraceId": observed["mergeTraces"][file_md5],
+                                    }
                                     for stage in ("parse", "chunk", "embed", "index")
                                 ],
                             },
@@ -202,8 +261,14 @@ class RuntimeE2ETest(unittest.TestCase):
                     return
                 if parsed.path == "/_alias/rha-knowledge-active":
                     self._write_json(
-                        {"rha-knowledge-v1": {"aliases": {"rha-knowledge-active": {}}}}
+                        {observed.get("activeAlias", "rha-knowledge-v2"): {"aliases": {"rha-knowledge-active": {}}}}
                     )
+                    return
+                if parsed.path == "/rha-knowledge-v2/_mapping":
+                    self._write_json({"rha-knowledge-v2": {"mappings": {"properties": {"text_content": {"type": "text"}, "vector": {"type": "dense_vector"}}}}})
+                    return
+                if "/_doc/alias-probe-" in parsed.path:
+                    self._write_json({"found": True})
                     return
                 self.send_error(404)
 
@@ -283,23 +348,21 @@ class RuntimeE2ETest(unittest.TestCase):
                 )
                 report_text = output_path.read_text(encoding="utf-8")
                 report = json.loads(report_text)
+                provenance_exists = output_path.with_suffix(output_path.suffix + ".provenance.json").is_file()
         finally:
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(len(observed["chunkFields"]), 4)
-        self.assertEqual(observed["chunkFields"][0], observed["chunkFields"][1])
-        self.assertEqual(observed["chunkFields"][2], observed["chunkFields"][3])
-        self.assertEqual(observed["chunkMediaTypes"], [
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            "image/png",
-            "image/png",
-        ])
+        self.assertEqual(len(observed["chunkFields"]), 11)
+        uploads_by_md5 = {}
+        for fields in observed["chunkFields"]:
+            uploads_by_md5.setdefault(fields["fileMd5"], []).append(fields)
+        self.assertEqual(len(uploads_by_md5), 5)
+        self.assertTrue(all(len(items) >= 2 for items in uploads_by_md5.values()))
         self.assertEqual(observed["merges"][0]["fileMd5"], observed["chunkFields"][0]["fileMd5"])
-        self.assertEqual(observed["merges"][1]["fileMd5"], observed["chunkFields"][2]["fileMd5"])
+        self.assertEqual({item["fileMd5"] for item in observed["merges"]}, set(uploads_by_md5))
         self.assertEqual(
             [item["query"] for item in observed["searchQueries"]],
             [["RHA retention period"], ["RHA image inspection code"]],
@@ -310,7 +373,10 @@ class RuntimeE2ETest(unittest.TestCase):
         self.assertEqual(observed["websocketClosed"], 2)
         self.assertEqual(report["schemaVersion"], 2)
         self.assertEqual(report["pipeline"]["status"], "SEARCHABLE")
-        self.assertEqual(report["pipeline"]["aliasReadback"]["indices"], ["rha-knowledge-v1"])
+        self.assertEqual(report["pipeline"]["aliasReadback"]["indices"], ["rha-knowledge-v2"])
+        self.assertTrue(any(observed["aliasProbe"]["vector"]))
+        self.assertEqual(report["multimodalEvidence"]["total"], 57)
+        self.assertTrue(provenance_exists)
         self.assertEqual(report["retrieval"]["hits"][0]["citations"], [citation])
         self.assertEqual(report["websocket"]["citations"], [citation])
         self.assertEqual(report["image"]["pipeline"]["status"], "SEARCHABLE")
@@ -618,8 +684,8 @@ class RuntimeE2ETest(unittest.TestCase):
             )
         finally:
             runtime.subprocess.run = original
-        self.assertIn("--max-messages", observed["command"])
-        self.assertEqual(observed["command"][observed["command"].index("--max-messages") + 1], "1")
+        self.assertNotIn("--max-messages", observed["command"])
+        self.assertIn("--timeout-ms", observed["command"])
 
     def test_generated_pptx_is_parsed_as_slide_evidence(self) -> None:
         try:
@@ -636,7 +702,7 @@ class RuntimeE2ETest(unittest.TestCase):
             parsed = PptParser().parse(path, "version-1")
 
         self.assertEqual(parsed.modality, "ppt")
-        self.assertEqual(len(parsed.evidenceUnits), 1)
+        self.assertEqual(len(parsed.evidenceUnits), 14)
         self.assertEqual(parsed.evidenceUnits[0].slide, 1)
         self.assertIn("seven years", parsed.evidenceUnits[0].text)
 

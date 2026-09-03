@@ -37,16 +37,16 @@
 ```yaml
 database:
   mysql:
-    dsn: "root:RHA2025@tcp(127.0.0.1:3307)/RHA?charset=utf8mb4&parseTime=True&loc=Local"
+    dsn: "${RHA_MYSQL_DSN}"
   redis:
     addr: "127.0.0.1:6380"
-    password: "RHA2025"
+    password: "${RHA_REDIS_PASSWORD}"
     db: 0
 
 minio:
   endpoint: "127.0.0.1:9000"
-  access_key_id: "minioadmin"
-  secret_access_key: "minioadmin"
+  access_key_id: "${RHA_MINIO_ACCESS_KEY_ID}"
+  secret_access_key: "${RHA_MINIO_SECRET_ACCESS_KEY}"
   bucket_name: "uploads"
 
 tika:
@@ -66,7 +66,7 @@ ai:
     base_url: "http://127.0.0.1:8090"
     timeout_ms: 120000
     ingestion_timeout_ms: 180000
-    shared_secret: "rha-internal-dev"
+    shared_secret: "${RHA_INTERNAL_TOKEN}"
 ```
 
 Python `ai-orchestrator` 需要以下环境变量：

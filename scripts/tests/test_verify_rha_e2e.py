@@ -52,7 +52,8 @@ def runtime_report() -> dict:
                 {"chunkIndex": 0, "statusCode": 200},
                 {"chunkIndex": 0, "statusCode": 200},
             ],
-            "merge": {"statusCode": 200},
+            "merge": {"statusCode": 200, "traceId": "upload-trace"},
+            "resumeCheck": {"source": "POST /api/v1/upload/check", "statusCode": 200, "completed": False, "uploadedChunks": [0]},
         },
         "pipeline": {
             "source": "GET /api/v1/documents/pipeline-status",
@@ -62,26 +63,38 @@ def runtime_report() -> dict:
             "aliasReadback": {
                 "source": "GET /_alias/rha-knowledge-active",
                 "statusCode": 200,
-                "indices": ["rha-knowledge-v1"],
+                "indices": ["rha-knowledge-v2"],
+            },
+            "aliasMigration": {
+                "previousIndex": "rha-knowledge-v2",
+                "newIndex": "rha-knowledge-v3-probe",
+                "mappingVerified": True,
+                "readbackVerified": True,
+                "switchedIndices": ["rha-knowledge-v3-probe"],
+                "rollbackIndices": ["rha-knowledge-v2"],
             },
             "stages": [
-                {"stage": "parse", "status": "SUCCESS", "attemptCount": 1},
-                {"stage": "chunk", "status": "SUCCESS", "attemptCount": 1},
-                {"stage": "embed", "status": "SUCCESS", "attemptCount": 1},
-                {"stage": "index", "status": "SUCCESS", "attemptCount": 1},
+                {"stage": "parse", "status": "SUCCESS", "attemptCount": 1, "lastTraceId": "upload-trace"},
+                {"stage": "chunk", "status": "SUCCESS", "attemptCount": 1, "lastTraceId": "upload-trace"},
+                {"stage": "embed", "status": "SUCCESS", "attemptCount": 1, "lastTraceId": "upload-trace"},
+                {"stage": "index", "status": "SUCCESS", "attemptCount": 1, "lastTraceId": "upload-trace"},
             ],
         },
         "retrieval": {
             "source": "GET /api/v1/search/hybrid",
             "statusCode": 200,
-            "traceId": "runtime-trace",
+            "traceId": "retrieval-trace",
             "hits": [{"fileMd5": "0123456789abcdef0123456789abcdef", "citations": [dict(citation)]}],
         },
         "websocket": {
             "source": "GET /chat/:token",
-            "traceId": "runtime-trace",
+            "traceId": "websocket-trace",
             "answer": "The retention period is seven years.",
             "citations": [dict(citation)],
+            "events": [
+                {"type": "chunk", "chunk": "The retention period is seven years.", "traceId": "websocket-trace"},
+                {"type": "completion", "status": "finished", "traceId": "websocket-trace"},
+            ],
         },
     }
     report["image"] = {
@@ -93,26 +106,39 @@ def runtime_report() -> dict:
                 {"chunkIndex": 0, "statusCode": 200},
                 {"chunkIndex": 0, "statusCode": 200},
             ],
-            "merge": {"statusCode": 200},
+            "merge": {"statusCode": 200, "traceId": "image-upload-trace"},
         },
         "pipeline": {
             "status": "SEARCHABLE",
             "documentVersion": "image-version",
             "stages": [
-                {"stage": stage, "status": "SUCCESS", "attemptCount": 1}
+                {"stage": stage, "status": "SUCCESS", "attemptCount": 1, "lastTraceId": "image-upload-trace"}
                 for stage in ("parse", "chunk", "embed", "index")
             ],
         },
         "retrieval": {
             "statusCode": 200,
-            "traceId": "runtime-trace",
+            "traceId": "image-retrieval-trace",
             "hits": [{"fileMd5": "fedcba9876543210fedcba9876543210", "citations": [dict(image_citation)]}],
         },
         "websocket": {
-            "traceId": "runtime-trace",
+            "traceId": "image-websocket-trace",
             "answer": "The image inspection code is IMG-2048.",
             "citations": [dict(image_citation)],
+            "events": [
+                {"type": "chunk", "chunk": "The image inspection code is IMG-2048.", "traceId": "image-websocket-trace"},
+                {"type": "completion", "status": "finished", "traceId": "image-websocket-trace"},
+            ],
         },
+    }
+    report["multimodalEvidence"] = {
+        "source": "POST /rha-evidence-active/_search",
+        "modalities": ["excel", "image", "pdf", "ppt", "word"],
+        "total": 57,
+        "counts": {"pdf": 14, "word": 14, "ppt": 14, "excel": 14, "image": 1},
+        "allVersioned": True,
+        "allLocated": True,
+        "allDurableAssets": True,
     }
     report["recovery"] = {
         "upload": {
@@ -123,7 +149,7 @@ def runtime_report() -> dict:
                 {"chunkIndex": 0, "statusCode": 200},
                 {"chunkIndex": 0, "statusCode": 200},
             ],
-            "merge": {"statusCode": 200},
+            "merge": {"statusCode": 200, "traceId": "recovery-upload-trace"},
         },
         "stage": "embed",
         "dlqMessageId": "d" * 64,
@@ -146,7 +172,7 @@ def runtime_report() -> dict:
             "status": "SEARCHABLE",
             "documentVersion": "image-version",
             "stages": [
-                {"stage": stage, "status": "SUCCESS", "attemptCount": 2, "replayCount": 1}
+                {"stage": stage, "status": "SUCCESS", "attemptCount": 2, "replayCount": 1, "lastTraceId": "recovery-upload-trace"}
                 for stage in ("parse", "chunk", "embed", "index")
             ],
         },
@@ -165,12 +191,12 @@ def reliability_report() -> dict:
     report = recovery_report()
     report["schemaVersion"] = 4
     first_events = [
-        {"type": "chunk", "chunk": "Remembered RHA-MEMORY-1", "traceId": "runtime-trace"},
-        {"type": "completion", "status": "finished", "traceId": "runtime-trace", "citations": []},
+        {"type": "chunk", "chunk": "Remembered RHA-MEMORY-1", "traceId": "memory-turn-one"},
+        {"type": "completion", "status": "finished", "traceId": "memory-turn-one", "citations": []},
     ]
     second_events = [
-        {"type": "chunk", "chunk": "RHA-MEMORY-1", "traceId": "runtime-trace"},
-        {"type": "completion", "status": "finished", "traceId": "runtime-trace", "citations": []},
+        {"type": "chunk", "chunk": "RHA-MEMORY-1", "traceId": "memory-turn-two"},
+        {"type": "completion", "status": "finished", "traceId": "memory-turn-two", "citations": []},
     ]
     report["reliability"] = {
         "degradation": {
@@ -206,8 +232,8 @@ def reliability_report() -> dict:
             "redisKeysAfter": [],
             "readbackItems": [{"text": "Durable marker RHA-MEMORY-1"}],
             "turns": [
-                {"traceId": "runtime-trace", "answer": "Remembered RHA-MEMORY-1", "events": first_events},
-                {"traceId": "runtime-trace", "answer": "RHA-MEMORY-1", "events": second_events},
+                {"traceId": "memory-turn-one", "answer": "Remembered RHA-MEMORY-1", "events": first_events},
+                {"traceId": "memory-turn-two", "answer": "RHA-MEMORY-1", "events": second_events},
             ],
         },
         "trace": {"events": first_events + second_events},
@@ -320,6 +346,15 @@ class VerifyRhaE2ETest(unittest.TestCase):
             path = Path(directory) / "report.json"
             path.write_text(json.dumps(report), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "image"):
+                VERIFY_MODULE.verify(path)
+
+    def test_rejects_runtime_acceptance_below_54_five_modality_evidence_units(self) -> None:
+        report = runtime_report()
+        report["multimodalEvidence"]["total"] = 53
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "54"):
                 VERIFY_MODULE.verify(path)
 
     def test_rejects_image_citation_without_pixel_metadata(self) -> None:
@@ -492,6 +527,15 @@ class VerifyRhaE2ETest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "auth.tokenAcquired"):
                 VERIFY_MODULE.verify(path)
 
+    def test_rejects_upload_without_interrupted_resume_check(self) -> None:
+        report = runtime_report()
+        del report["upload"]["resumeCheck"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "resumeCheck"):
+                VERIFY_MODULE.verify(path)
+
     def test_rejects_report_without_duplicate_chunk_and_merge_observations(self) -> None:
         report = {
             "reportKind": "rha-runtime-e2e",
@@ -535,6 +579,15 @@ class VerifyRhaE2ETest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "aliasReadback"):
                 VERIFY_MODULE.verify(path)
 
+    def test_rejects_alias_migration_without_rollback_to_previous_index(self) -> None:
+        report = runtime_report()
+        report["pipeline"]["aliasMigration"]["rollbackIndices"] = ["rha-knowledge-v3-probe"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "aliasMigration"):
+                VERIFY_MODULE.verify(path)
+
     def test_rejects_report_without_runtime_retrieval_hit(self) -> None:
         report = runtime_report()
         report["retrieval"]["hits"] = []
@@ -567,10 +620,54 @@ class VerifyRhaE2ETest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "match a retrieval citation"):
                 VERIFY_MODULE.verify(path)
 
-    def test_rejects_trace_mismatch_across_retrieval_and_websocket(self) -> None:
+    def test_accepts_current_version_citation_sets_with_a_non_first_overlap(self) -> None:
         report = runtime_report()
-        report["websocket"]["traceId"] = "different-trace"
+        overlapping = dict(report["websocket"]["citations"][0])
+        report["websocket"]["citations"].insert(0, {
+            **overlapping,
+            "evidenceId": "ppt-slide-ranked-differently",
+            "slide": 2,
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            VERIFY_MODULE.verify(path)
 
+    def test_accepts_distinct_public_request_traces_with_pipeline_continuity(self) -> None:
+        report = runtime_report()
+        merge_trace = "a" * 16
+        report["upload"]["merge"]["traceId"] = merge_trace
+        for stage in report["pipeline"]["stages"]:
+            stage["lastTraceId"] = merge_trace
+        report["retrieval"]["traceId"] = "b" * 16
+        report["websocket"]["traceId"] = "c" * 16
+        report["websocket"]["events"] = [
+            {"type": "chunk", "chunk": "The retention period is ", "traceId": "c" * 16},
+            {"type": "completion", "status": "finished", "traceId": "c" * 16},
+        ]
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            VERIFY_MODULE.verify(path)
+
+    def test_rejects_pipeline_or_stream_trace_discontinuity(self) -> None:
+        mutations = (
+            lambda report: report["pipeline"]["stages"][2].update(lastTraceId="wrong"),
+            lambda report: report["websocket"]["events"][0].update(traceId="wrong"),
+        )
+        for mutate in mutations:
+            report = runtime_report()
+            mutate(report)
+            with self.subTest(report=report), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "report.json"
+                path.write_text(json.dumps(report), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "traceId"):
+                    VERIFY_MODULE.verify(path)
+
+    def test_rejects_recovery_pipeline_trace_discontinuity(self) -> None:
+        report = recovery_report()
+        report["recovery"]["pipeline"]["stages"][3]["lastTraceId"] = "wrong"
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "report.json"
             path.write_text(json.dumps(report), encoding="utf-8")

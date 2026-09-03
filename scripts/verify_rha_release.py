@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -289,6 +290,16 @@ def verify_runtime_report(path: Path) -> dict[str, Any]:
         raise ValueError("runtime E2E reliability evidence is required")
     if _contains_fixture_marker(report):
         raise ValueError("fixture/synthetic report cannot be presented as runtime E2E")
+    provenance_path = path.with_suffix(path.suffix + ".provenance.json")
+    if not provenance_path.is_file():
+        raise ValueError("runner provenance sidecar is required")
+    provenance = load_json(provenance_path)
+    if provenance.get("kind") != "rha-runtime-runner-provenance" or provenance.get("runner") != "scripts/rha_runtime_e2e.py":
+        raise ValueError("runner provenance identity is invalid")
+    report_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    runner_digest = hashlib.sha256((ROOT / "scripts" / "rha_runtime_e2e.py").read_bytes()).hexdigest()
+    if provenance.get("reportSha256") != report_digest or provenance.get("runnerSha256") != runner_digest:
+        raise ValueError("runner provenance digest mismatch")
     run_runtime_verifier(path)
     return report
 

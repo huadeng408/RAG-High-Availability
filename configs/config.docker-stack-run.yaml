@@ -4,14 +4,14 @@ server:
 
 database:
   mysql:
-    dsn: "root:RHA2025@tcp(mysql:3306)/RHA?charset=utf8mb4&parseTime=True&loc=Local"
+    dsn: "${RHA_MYSQL_DSN}"
   redis:
     addr: "redis:6379"
-    password: "RHA2025"
+    password: "${RHA_REDIS_PASSWORD}"
     db: 0
 
 jwt:
-  secret: "PXrQbuCwXwOZzkML/Vm2S5rSwt1iybvmKtGDzVEu+Hc="
+  secret: "${RHA_JWT_SECRET}"
   access_token_expire_hours: 24
   refresh_token_expire_days: 7
 
@@ -37,8 +37,8 @@ kafka:
 
 minio:
   endpoint: "minio:9000"
-  access_key_id: "minioadmin"
-  secret_access_key: "minioadmin"
+  access_key_id: "${RHA_MINIO_ACCESS_KEY_ID}"
+  secret_access_key: "${RHA_MINIO_SECRET_ACCESS_KEY}"
   use_ssl: false
   bucket_name: "uploads"
 
@@ -109,4 +109,4 @@ ai:
     base_url: "http://host.docker.internal:8090"
     timeout_ms: 120000
     ingestion_timeout_ms: 180000
-    shared_secret: "rha-internal-dev"
+    shared_secret: "${RHA_INTERNAL_TOKEN}"

@@ -130,6 +130,9 @@ type Citation struct {
 	Page            int            `json:"page,omitempty"`
 	Slide           int            `json:"slide,omitempty"`
 	Sheet           string         `json:"sheet,omitempty"`
+	RowStart        int            `json:"rowStart,omitempty"`
+	RowEnd          int            `json:"rowEnd,omitempty"`
+	HeadingPath     []string       `json:"headingPath,omitempty"`
 	BBox            *BoundingBox   `json:"bbox,omitempty"`
 	Image           *ImageMetadata `json:"image,omitempty"`
 	Excerpt         string         `json:"excerpt"`
@@ -154,6 +157,9 @@ func NewCitation(evidence EvidenceUnit) Citation {
 		Page:            evidence.Page,
 		Slide:           evidence.Slide,
 		Sheet:           evidence.Sheet,
+		RowStart:        evidence.RowStart,
+		RowEnd:          evidence.RowEnd,
+		HeadingPath:     evidence.HeadingPath,
 		BBox:            evidence.BBox,
 		Image:           evidence.Image,
 		Excerpt:         evidence.Text,
